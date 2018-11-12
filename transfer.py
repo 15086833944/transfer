@@ -247,21 +247,21 @@ def check_agent():
             cur.execute("select biz_ip from process_info")
             all_process_ip = cur.fetchall()
             for x in set(all_process_ip):
-                cur.execute("select * from process_info where biz_ip = '{}' limit 1".format(x[0]))
+                cur.execute("select * from process_info where biz_ip = '{}' and rownum = 1".format(x[0]))
                 info = cur.fetchall()
                 time_diff = now_time - info[0][1]  #记录的时间与当前的时间差
                 time_diff1 = str(time_diff).split(':')
                 time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))  #以秒钟来记录差时
-                if x[-3] == 0:  #按照分钟的定时
-                    time_cycle = x[-4]*60
+                if info[0][-3] == 0:  #按照分钟的定时
+                    time_cycle = info[0][-4]*60
                     if time_cycle + 60 < time_diff2:    #判断buffer 1分钟
-                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + x[2])
+                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + info[0][2])
                     else:
                         continue
                 else:           #按照小时的定时
-                    time_cycle = x[-4] * 3600
+                    time_cycle = info[0][-4] * 3600
                     if time_cycle + 60 < time_diff2:    #判断buffer 1分钟
-                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + x[2])
+                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + info[0][2])
                     else:
                         continue
         except Exception as e:
