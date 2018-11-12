@@ -30,7 +30,7 @@ except OSError, error:
 
 def receive_msg():
     socketfd = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    socketfd.bind(('0.0.0.0',9100))
+    socketfd.bind(('0.0.0.0',9003))
     while True:
         data,addr = socketfd.recvfrom(1024)
         print '收到信息：'+data.decode()
@@ -38,7 +38,7 @@ def receive_msg():
 
 def fn():
     socketff = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    socketff.bind(('0.0.0.0', 9101))
+    socketff.bind(('0.0.0.0', 9004))
     while True:
         data, addr = socketff.recvfrom(1024)
         print '收到信息：' + data.decode()
