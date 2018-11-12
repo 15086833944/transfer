@@ -21,10 +21,9 @@ def check_agent():
             cur = db.cursor()
             cur.execute("select * from process_info")
             all_process_info = cur.fetchall()
-            # print all_process_info
             for x in all_process_info:
                 time_diff = now_time - x[1]  #记录的时间与当前的时间差
-                time_diff1 = time_diff.split(':')
+                time_diff1 = str(time_diff).split(':')
                 time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))  #以秒钟来记录差时
                 if x[-3] == 0:  #按照分钟的定时
                     time_cycle = x[-4]*60
