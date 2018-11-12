@@ -15,6 +15,8 @@ import os
 import sys
 
 import time
+
+import datetime
 from gevent import monkey
 from gevent.pywsgi import WSGIServer
 import socket
@@ -116,7 +118,8 @@ def storeinfo():
     trigger_cycle_unit = request.form.get('trigger_cycle_unit')
     should_be = request.form.get('should_be')
     new_count = request.form.get('new_count')
-    current_time = request.form.get('current_time')
+    current_time = datetime.datetime.now().strftime("%Y-%m=%d %H:%M:%S")
+    # current_time = request.form.get('current_time')
     # 比对当前进程数与应该的进程数，若触发报警值则记录
     if trigger_compare == 0:
         if new_count > should_be:
@@ -133,7 +136,7 @@ def storeinfo():
         # 接收agent传送的信息写入文件
         # msgs = ''
         # msgs += ' process_id:' + str(process_id)                         #agent主机id
-        # msgs += 'report_time:' + current_time                            #agent上传问题的时间
+        # msgs += 'report_time:' + current_time                            #agent上传问题的时间,以transfer主机时间为准
         # msgs += ' biz_ip:' + str(biz_ip)                                 #业务ip
         # msgs += ' manage_ip:' + str(manage_ip)                           #管理ip
         # msgs += ' process_name:' + process_name                          #进程名称
@@ -220,7 +223,7 @@ def do_trans(sockfd, data):
         if not agent_ip:
             logger.info('the cmdb_host table has no ip info about hostid:' + str(data))
         else:
-            msg = {"pststus": 7, 'host_id': data, 'ip': agent_ip[0][0]}
+            msg = {"pstatus": 7, 'host_id': data, 'ip': agent_ip[0][0]}
             agent_ip_port = (agent_ip[0][0], 9997)
             sockfd.sendto(json.dumps(msg), agent_ip_port)
             logger.info('the hostid:' + str(data) + ' info has already send to agent successed !')
