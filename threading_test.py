@@ -52,7 +52,6 @@ def ff():
     msg["should_be"]=1
     msg["new_count"]=1
     data = urllib.urlencode(msg)
-    print data
     try:
         for y in range(10):
             req = urllib2.Request(url="http://172.30.130.126:9995/storeinfo/",data=data)
