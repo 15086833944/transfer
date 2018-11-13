@@ -11,6 +11,13 @@ from multiprocessing import Queue
 reload(sys)
 sys.setdefaultencoding('utf8')
 
+m = 0  # 用来记录selectinfo接口出现错误的次数
+n = 0  # 用来记录storeinfo接口出现错误的次数
+
+data_queue1 = Queue()  # 用来装所有的调取selectinfo接口的线程
+data_queue2 = Queue()  # 用来装所有的调取storeinfo接口的线程
+
+
 # 调取selectinfo接口的函数
 def fn(m):
     for x in range(10):
@@ -50,54 +57,47 @@ def ff(n):
         n+=1
 
 
-
 def main():
-    m = 0  # 用来记录selectinfo接口出现错误的次数
-    n = 0  # 用来记录storeinfo接口出现错误的次数
-
-    data_queue1 = Queue()  # 用来装所有的调取selectinfo接口的线程
-    data_queue2 = Queue()  # 用来装所有的调取storeinfo接口的线程
-
     for x in range(10):
         data_queue1.put(x)
-
     for y in range(10,20):
         data_queue2.put(y)
-
-    print data_queue1
-    print data_queue2
 
     pid = os.fork()
     if pid == 0:
         while True:
-            print data_queue1
             try:
-                item = data_queue1.get() #获取线程
-                if item:
+                item1 = data_queue1.get() #获取线程
+                print '调取selectinfo的线程：'+str(item1)
+                if item1:
                     t = Thread(target=fn,args=(m,))
                     t.setDaemon(True)
                     t.start()
                 else:
+                    print '调取selectinfo执行完，退出循环'
                     break
             except:
-                print '线程退出'
+                print '创建线程失败'
+        print '111111111111111111111111'
         if m == 0:
             print '调取selectinfo接口执行成功！'
         else:
             print '调取selectinfo接口执行出现错误，错误数量为：'+str(m)
     else:
         while True:
-            print data_queue2
             try:
-                item = data_queue2.get() #获取线程
-                if item:
-                    t = Thread(target=ff,args=n)
+                item2 = data_queue2.get() #获取线程
+                print '调取storeinfo的线程：' + str(item2)
+                if item2:
+                    t = Thread(target=ff,args=(n,))
                     t.setDaemon(True)
                     t.start()
                 else:
+                    print '调取storeinfo线程执行完，退出循环'
                     break
             except:
-                print '线程退出'
+                print '创建线程失败'
+        print '222222222222222222222222'
         if n == 0:
             print '调取storeinfo接口执行成功！'
         else:
