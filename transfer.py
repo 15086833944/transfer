@@ -5,17 +5,16 @@
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
 '''
-功能说明：主要为3个模块
+功能说明：主要为4个模块
 模块1 → selectinfo模块为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
 模块2 → storeinfo模块主要是为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
 模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的host_id信息后，将该信息传送给对应的agent主机。
+模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
 '''
 
 import os
 import sys
-
 import time
-
 import datetime
 from gevent import monkey
 from gevent.pywsgi import WSGIServer
@@ -30,17 +29,17 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 # 日志记录
-LOG_FILE = "/home/opvis/transfer_server/log/transfer.log"
-if not os.path.exists('/home/opvis/transfer_server/log'):
+LOG_FILE = "/home/opvis/transfer_server/log/transfer.log"   #日志文档的地址
+if not os.path.exists('/home/opvis/transfer_server/log'):   #如果没有这个路径的话自动创建该路径
     os.makedirs('/home/opvis/transfer_server/log/')
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=30)
-datefmt = '%Y-%m-%d %H:%M:%S'
-format_str = '%(asctime)s %(levelname)s %(message)s '
-formatter = logging.Formatter(format_str, datefmt)
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+logger = logging.getLogger()                                #创建logging的实例对象
+logger.setLevel(logging.INFO)                               #设置日志保存等级，低于INFO等级就不记录
+fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=30)  # 以day保存，间隔1天，最多保留30天的日志
+datefmt = '%Y-%m-%d %H:%M:%S'                               #定义每条日志的时间显示格式
+format_str = '%(asctime)s %(levelname)s %(message)s '       #定义日志内容显示格式
+formatter = logging.Formatter(format_str, datefmt)          #定义日志前面显示时间， 后面显示内容
+fh.setFormatter(formatter)                                  #执行定义
+logger.addHandler(fh)                                       #执行定义
 
 monkey.patch_all()
 # 创建flask对象
@@ -63,7 +62,7 @@ def selectinfo(ips):
                 count += 1
                 cur.execute("select * from cmdb_host_process where host_id = %s" %
                     host_info[0][0])
-                infos = cur.fetchall()  # 得到所有hostid相关的进程信息，元祖
+                infos = cur.fetchall()
                 if infos:
                     # 将查询内容反馈给agent
                     D = {}  # 用来装一个进程的信息
@@ -120,16 +119,16 @@ def storeinfo():
     new_count = request.form.get('new_count')
     current_time = datetime.datetime.now().strftime("%Y-%m=%d %H:%M:%S")
     # current_time = request.form.get('current_time')
-    # 比对当前进程数与应该的进程数，若触发报警值则记录
+    # 比对主机当前实际进程数与应该有的进程数，若触发报警值则记录
     if trigger_compare == 0:
         if new_count > should_be:
-            logger.info('************报警值已触发！请注意！************ process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('******报警值已触发！请注意！****** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
     elif trigger_compare == 2:
         if new_count == should_be:
-            logger.info('************报警值已触发！请注意！************ process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('******报警值已触发！请注意！****** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
     else:
         if new_count < should_be:
-            logger.info('************报警值已触发！请注意！************ process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('******报警值已触发！请注意！****** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
 
     if id and biz_ip and manage_ip and process_name and key_word and trigger_compare and trigger_value and (
         trigger_level and trigger_cycle_value and trigger_cycle_unit and should_be and new_count and current_time):
@@ -167,10 +166,12 @@ def storeinfo():
             cur.execute("select * from process_info where process_id = {}".format(process_id))
             data = cur.fetchall()
             if not data:
+                # 若数据库不存在该条数据，则说明是新增进来的数据，执行添加操作
                 sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{})".format(process_id,str(current_time),
                 str(biz_ip),str(manage_ip),str(process_name),str(key_word),trigger_compare,trigger_level,trigger_cycle_value,trigger_cycle_unit,should_be,new_count)
                 cur.execute(sql1)
             else:
+                # 若数据库存在该条数据，则执行修改时间和实际进程数量的操作
                 sql2 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {} where process_id = {}".format(str(current_time),new_count,process_id)
                 cur.execute(sql2)
             db.commit()
@@ -183,12 +184,11 @@ def storeinfo():
             db.close()
             logger.info('storeinfo module connect to oracle fail:'+str(e))
             return 'transfer store info failed ! maybe some error has occur on the transfer,please check transfer!'
-        ##
     else:
         logger.info('the data from agent_ip:'+str(biz_ip)+', is not complete, so save info failed !')
         return 'upload agent information failed ! maybe some data has been lost,please check agent!'
 
-# 循环接收proxy传来的信息
+# 循环接收proxy传来的信息，完善信息后，将信息传送给agent
 def transfer():
     HOST = '0.0.0.0'
     PORT = 9994
@@ -202,10 +202,10 @@ def transfer():
     else:
         while True:
             # 循环接收proxy传来的信息,收到的是json串
-            data, addr = sockfd.recvfrom(10240)
+            data, addr = sockfd.recvfrom(4096)
             if data:
                 logger.info('already receive host_id:'+str(data)+' from proxy, start to transfer...... !')
-                # 每次收到消息后新建一个子进程来执行传输，避免UDP消息冲突
+                # 每次收到消息后新建一个子进程来执行传输任务，避免UDP消息冲突而丢失数据
                 pid = os.fork()
                 if pid == 0:
                     do_trans(sockfd, data)
@@ -238,30 +238,34 @@ def do_trans(sockfd, data):
 # 定时遍历数据库，确认agent主机是否掉线
 def check_agent():
     while True:
-        # 每隔60秒执行一次
-        time.sleep(60)
+        # 每隔120秒执行一次
+        time.sleep(120)
         try:
             now_time = datetime.datetime.now()
             db = cx_Oracle.connect('umsproxy', 'ums1234', '172.30.130.126:1521/umsproxy')
             cur = db.cursor()
-            cur.execute("select biz_ip from process_info")
+            # 搜索所有的主机biz_ip
+            cur.execute("select distinct biz_ip from process_info")
             all_process_ip = cur.fetchall()
-            for x in set(all_process_ip):
+            for x in all_process_ip:
+                # 每个主机biz_ip查询1条记录，通过这一条记录来判断主机是否在线
                 cur.execute("select * from process_info where biz_ip = '{}' and rownum = 1".format(x[0]))
                 info = cur.fetchall()
-                time_diff = now_time - info[0][1]  #记录的时间与当前的时间差
+                # 获取记录的时间与当前的时间差
+                time_diff = now_time - info[0][1]
                 time_diff1 = str(time_diff).split(':')
-                time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))  #以秒钟来记录差时
-                if info[0][-3] == 0:  #按照分钟的定时
+                # 换算成秒钟来记录差时
+                time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))
+                if info[0][-3] == 0:  #监控周期为分钟的定时任务
                     time_cycle = info[0][-4]*60
-                    if time_cycle + 60 < time_diff2:    #判断buffer 1分钟
-                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + info[0][2])
+                    if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
+                        logger.info('-------> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
                     else:
                         continue
-                else:           #按照小时的定时
+                else:                 #监控周期为小时的定时任务
                     time_cycle = info[0][-4] * 3600
-                    if time_cycle + 60 < time_diff2:    #判断buffer 1分钟
-                        logger.info('-----------------> 发现有主机失联！失联主机biz_ip:' + info[0][2])
+                    if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
+                        logger.info('-------> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
                     else:
                         continue
         except Exception as e:
@@ -271,7 +275,7 @@ def check_agent():
             db.close()
 
 
-# 创建守护进程,让该程序由linux系统控制，不受用户退出而影响
+# 创建守护进程,让该程序由系统控制，不受用户退出而影响
 def daemon():
     try:
         pid1 = os.fork()
