@@ -39,16 +39,16 @@ def fn():
 def ff():
     global n
     msg = {}
-    msg["id"]=10000,
-    msg["biz_ip"]="172.30.130.134",
-    msg["manage_ip"]="172.30.130.134",
-    msg["process_name"]="01test.py",
-    msg["key_word"]="01test",
-    msg["trigger_compare"]=3,
-    msg["trigger_value"]=1,
-    msg["trigger_level"]=1,
-    msg["trigger_cycle_value"]=1,
-    msg["trigger_cycle_unit"]=0,
+    msg["id"]=10000
+    msg["biz_ip"]="172.30.130.134"
+    msg["manage_ip"]="172.30.130.134"
+    msg["process_name"]="01test.py"
+    msg["key_word"]="01test"
+    msg["trigger_compare"]=3
+    msg["trigger_value"]=1
+    msg["trigger_level"]=1
+    msg["trigger_cycle_value"]=1
+    msg["trigger_cycle_unit"]=0
     msg["should_be"]=1
     msg["new_count"]=1
     data = urllib.urlencode(msg)
@@ -75,15 +75,19 @@ def main():
     pid = os.fork()
     if pid == 0:
         global m
+        p = []
         while True:
             try:
                 item1 = data_queue1.get() #获取线程
                 print '调取selectinfo的线程：'+str(item1)
                 if item1:
                     t = Thread(target=fn)
-                    t.setDaemon(True)
+                    # t.setDaemon(True)
                     t.start()
+                    p.append(t)
                 if data_queue1.empty():
+                    for z in p:
+                        z.join()
                     print '调取selectinfo执行完，退出循环'
                     break
             except:
@@ -95,15 +99,18 @@ def main():
         sys.exit('selectinfo退出进程')
     else:
         global n
+        q = []
         while True:
             try:
                 item2 = data_queue2.get() #获取线程
                 print '调取storeinfo的线程：' + str(item2)
                 if item2:
                     t = Thread(target=ff)
-                    t.setDaemon(True)
+                    # t.setDaemon(True)
                     t.start()
                 if data_queue2.empty():
+                    for k in q:
+                        k.join()
                     print '调取storeinfo线程执行完，退出循环'
                     break
             except:
