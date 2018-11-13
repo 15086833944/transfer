@@ -50,6 +50,7 @@ def ff(n):
         n+=1
 
 
+
 def main():
     m = 0  # 用来记录selectinfo接口出现错误的次数
     n = 0  # 用来记录storeinfo接口出现错误的次数
