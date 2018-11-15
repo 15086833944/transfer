@@ -24,8 +24,7 @@ import cx_Oracle
 import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
-import redis
-from flask.ext.cache import Cache
+from flask_cache import Cache
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -57,7 +56,7 @@ config = {
 # 创建flask对象
 app = Flask(__name__)
 app.config.from_object(config)
-cache.init_app(app)
+cache.init_app(app,config)
 
 
 @app.route('/selectinfo/<ips>', methods=['POST', 'GET'])

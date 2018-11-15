@@ -9,6 +9,7 @@ import urllib2
 import Queue
 
 
+
 reload(sys)
 sys.setdefaultencoding('utf8')
 
@@ -29,8 +30,6 @@ def fn():
             data = res.read()
             if not data:
                 m+=1
-            else:
-                print data
         except:
             m+=1
 
@@ -53,15 +52,13 @@ def ff():
     msg["new_count"]=1
     data = urllib.urlencode(msg)
     try:
-        for y in range(10):
+        for y in range(2):
             req = urllib2.Request(url="http://172.30.130.126:9995/storeinfo/",data=data)
             res = urllib2.urlopen(req)
             fanhui = res.read()
-            print fanhui
             if fanhui == 'ok':
                 pass
             else:
-                print fanhui
                 n += 1
     except:
         n+=1
