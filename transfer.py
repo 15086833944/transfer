@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
-# wirte by: LiuDeQian
+# write by: LiuDeQian
 # data: 2018.10.30
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
@@ -24,7 +24,7 @@ import cx_Oracle
 import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
-from flask_cache import Cache
+# from flask_cache import Cache
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -45,28 +45,28 @@ logger.addHandler(fh)                                       #执行定义
 monkey.patch_all()
 
 # 配置redis缓存
-cache = Cache()
-config = {
-    'CACHE_TYPE':'redis',
-    'CACHE_REDIS_HOST':'127.0.0.1',
-    'CACHE_REDIS_PORT':6379,
-    'CACHE_REDIS_DB':'',
-    'CACHE_REDIS_PASSWORD':''
-}
+# cache = Cache()
+# config = {
+#     'CACHE_TYPE':'redis',
+#     'CACHE_REDIS_HOST':'127.0.0.1',
+#     'CACHE_REDIS_PORT':6379,
+#     'CACHE_REDIS_DB':'',
+#     'CACHE_REDIS_PASSWORD':''
+# }
 # 创建flask对象
 app = Flask(__name__)
-app.config.from_object(config)
-cache.init_app(app,config)
+# app.config.from_object(config)
+# cache.init_app(app,config)
 
 
 @app.route('/selectinfo/<ips>', methods=['POST', 'GET'])
-@cache.cached(timeout=2)
+# @cache.cached(timeout=2)
 # 查询数据库接口，将数据传给agent
 def selectinfo(ips):
     ip_list = ips.strip("'").strip('"').split(',')
     # logger.info('selectinfo start to be invoked ......by'+str(ip_list))
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '172.30.130.126:1521/umsproxy')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
         cur = db.cursor()
         count = 0
         for ip in ip_list:
@@ -116,7 +116,7 @@ def selectinfo(ips):
 
 
 @app.route('/storeinfo/', methods=['POST','GET'])
-@cache.cached(timeout=2)
+# @cache.cached(timeout=2)
 # 记录agent传过来的主机信息, 将信息记录到文件
 def storeinfo():
     # logger.info('storeinfo start to be invoked ......')
@@ -176,7 +176,7 @@ def storeinfo():
 
         #接收agent传送的信息存入数据库
         try:
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '172.30.130.126:1521/umsproxy')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
             cur = db.cursor()
             cur.execute("select * from process_info where process_id = {}".format(process_id))
             data = cur.fetchall()
@@ -231,7 +231,7 @@ def transfer():
 # 具体执行传输任务
 def do_trans(sockfd, data):
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '172.30.130.126:1521/umsproxy')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
         cur = db.cursor()
         cur.execute("select biz_ip from cmdb_host where id=%d"%int(data))
         agent_ip = cur.fetchall()
@@ -257,34 +257,40 @@ def check_agent():
         time.sleep(120)
         try:
             now_time = datetime.datetime.now()
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '172.30.130.126:1521/umsproxy')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
             cur = db.cursor()
             # 搜索所有的主机biz_ip
             cur.execute("select distinct biz_ip from process_info")
             all_process_ip = cur.fetchall()
-            for x in all_process_ip:
-                # 每个主机biz_ip查询1条记录，通过这一条记录来判断主机是否在线
-                cur.execute("select * from process_info where biz_ip = '{}' and rownum = 1".format(x[0]))
-                info = cur.fetchall()
-                # 获取记录的时间与当前的时间差
-                time_diff = now_time - info[0][1]
-                time_diff1 = str(time_diff).split(':')
-                # 换算成秒钟来记录差时
-                time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))
-                if info[0][-3] == 0:  #监控周期为分钟的定时任务
-                    time_cycle = info[0][-4]*60
-                    if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
-                        logger.info('---> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
+            if all_process_ip:
+                for x in all_process_ip:
+                    # 每个主机biz_ip查询1条记录，通过这一条记录来判断主机是否在线
+                    cur.execute("select * from process_info where biz_ip = '{}' and rownum = 1".format(x[0]))
+                    info = cur.fetchall()
+                    # 获取记录的时间与当前的时间差
+                    time_diff = now_time - info[0][1]
+                    if ',' in time_diff:
+                        time_diff1 = str(time_diff).split(',')[1].split(':')
                     else:
-                        continue
-                else:                 #监控周期为小时的定时任务
-                    time_cycle = info[0][-4] * 3600
-                    if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
-                        logger.info('---> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
-                    else:
-                        continue
+                        time_diff1 = str(time_diff).split(':')
+                    # 换算成秒钟来记录差时
+                    time_diff2 = int(time_diff1[0]) * 3600 + int(time_diff1[1]) * 60 + int(float(time_diff1[2]))
+                    if info[0][-3] == 0:  #监控周期为分钟的定时任务
+                        time_cycle = info[0][-4]*60
+                        if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
+                            logger.info('---> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
+                        else:
+                            continue
+                    else:                 #监控周期为小时的定时任务
+                        time_cycle = info[0][-4] * 3600
+                        if time_cycle + 60 < time_diff2:    #判断标准为监控周期 + 1分钟，若不在线则判断为失联状态
+                            logger.info('---> 发现有主机失联！失联主机biz_ip: ' + info[0][2])
+                        else:
+                            continue
+            else:
+                continue
         except Exception as e:
-            print e
+            logger.info('check_agent moudle has error: '+str(e))
         finally:
             cur.close()
             db.close()
