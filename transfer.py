@@ -66,7 +66,7 @@ def selectinfo(ips):
     ip_list = ips.strip("'").strip('"').split(',')
     # logger.info('selectinfo start to be invoked ......by'+str(ip_list))
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
         cur = db.cursor()
         count = 0
         for ip in ip_list:
@@ -176,7 +176,7 @@ def storeinfo():
 
         #接收agent传送的信息存入数据库
         try:
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
             cur = db.cursor()
             cur.execute("select * from process_info where process_id = {}".format(process_id))
             data = cur.fetchall()
@@ -231,7 +231,7 @@ def transfer():
 # 具体执行传输任务
 def do_trans(sockfd, data):
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
         cur = db.cursor()
         cur.execute("select biz_ip from cmdb_host where id=%d"%int(data))
         agent_ip = cur.fetchall()
@@ -257,7 +257,7 @@ def check_agent():
         time.sleep(120)
         try:
             now_time = datetime.datetime.now()
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.181.45.7:1521/umsproxy')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
             cur = db.cursor()
             # 搜索所有的主机biz_ip
             cur.execute("select distinct biz_ip from process_info")
@@ -269,7 +269,7 @@ def check_agent():
                     info = cur.fetchall()
                     # 获取记录的时间与当前的时间差
                     time_diff = now_time - info[0][1]
-                    if ',' in time_diff:
+                    if ',' in str(time_diff):
                         time_diff1 = str(time_diff).split(',')[1].split(':')
                     else:
                         time_diff1 = str(time_diff).split(':')
