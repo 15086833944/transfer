@@ -17,11 +17,11 @@ with open(file,'r') as f:
         x.append(pandas.to_datetime(line.split(',')[0]))
         y.append(line.split(',')[1].split('：')[1].strip())
 
-pylab.gca().xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M:%S"))
-pylab.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+# pylab.gca().xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M:%S"))
+# pylab.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=2))
 
 pylab.plot(x,y)   #在当前绘图对象绘图（X轴，Y轴，蓝色虚线，线宽度）
-pylab.xlabel("Time(s)") #X轴标签
+pylab.xlabel("Time(m)") #X轴标签
 pylab.ylabel("Count")  #Y轴标签
 pylab.title("Concurrent table") #图标题
 # pylab.show()  #显示图
