@@ -10,6 +10,7 @@
 模块2 → storeinfo模块主要是为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
 模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的host_id信息后，将该信息传送给对应的agent主机。
 模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
+模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。每隔30秒触发一次
 '''
 
 import os
@@ -24,6 +25,7 @@ import cx_Oracle
 import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
+from threading import Thread
 # from flask_cache import Cache
 
 reload(sys)
@@ -66,7 +68,7 @@ def selectinfo(ips):
     ip_list = ips.strip("'").strip('"').split(',')
     # logger.info('selectinfo start to be invoked ......by'+str(ip_list))
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '127.0.0.1:1521/umstest')
         cur = db.cursor()
         count = 0
         for ip in ip_list:
@@ -132,18 +134,19 @@ def storeinfo():
     trigger_cycle_unit = request.form.get('trigger_cycle_unit')
     should_be = request.form.get('should_be')
     new_count = request.form.get('new_count')
-    current_time = datetime.datetime.now().strftime("%Y-%m=%d %H:%M:%S")
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agent_send_time = request.form.get('current_time')
     # current_time = request.form.get('current_time')
     # 比对主机当前实际进程数与应该有的进程数，若触发报警值则记录
     if trigger_compare == 0:
         if new_count > should_be:
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(biz_ip) + ', agent_send_time:' +str(agent_send_time))
     elif trigger_compare == 2:
         if new_count == should_be:
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(biz_ip) + ', agent_send_time:' +str(agent_send_time))
     else:
         if new_count < should_be:
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ' biz_ip:' + str(biz_ip))
+            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(biz_ip) + ', agent_send_time:' +str(agent_send_time))
 
     if id and biz_ip and manage_ip and process_name and key_word and trigger_compare and trigger_value and (
         trigger_level and trigger_cycle_value and trigger_cycle_unit and should_be and new_count and current_time):
@@ -176,7 +179,7 @@ def storeinfo():
 
         #接收agent传送的信息存入数据库
         try:
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '127.0.0.1:1521/umstest')
             cur = db.cursor()
             cur.execute("select * from process_info where process_id = {}".format(process_id))
             data = cur.fetchall()
@@ -231,7 +234,7 @@ def transfer():
 # 具体执行传输任务
 def do_trans(sockfd, data):
     try:
-        db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
+        db = cx_Oracle.connect('umsproxy', 'ums1234', '127.0.0.1:1521/umstest')
         cur = db.cursor()
         cur.execute("select biz_ip from cmdb_host where id=%d"%int(data))
         agent_ip = cur.fetchall()
@@ -252,12 +255,13 @@ def do_trans(sockfd, data):
 
 # 定时遍历数据库，确认agent主机是否掉线
 def check_agent():
+
     while True:
         # 每隔120秒执行一次
         time.sleep(120)
         try:
             now_time = datetime.datetime.now()
-            db = cx_Oracle.connect('umsproxy', 'ums1234', '10.148.6.57:1521/umstest')
+            db = cx_Oracle.connect('umsproxy', 'ums1234', '127.0.0.1:1521/umstest')
             cur = db.cursor()
             # 搜索所有的主机biz_ip
             cur.execute("select distinct biz_ip from process_info")
@@ -296,6 +300,18 @@ def check_agent():
             db.close()
 
 
+# 定时每30秒查询一次当前端口的并发量并记录在文档里面
+def check_count():
+    while True:
+        msg = os.popen('netstat -nat |grep 9995 |wc -l')
+        count = msg.read()
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open('/home/opvis/transfer_server/log/check_count_'+str(datetime.date.today())+'.log', 'a') as f:
+            f.write(current_time + ', 当前时间的并发访问量为：' + count)
+        msg.close()
+        time.sleep(60)
+
+
 # 创建守护进程,让该程序由系统控制，不受用户退出而影响
 def daemon():
     try:
@@ -332,9 +348,21 @@ def fn2():
     elif pid == 0:
         check_agent()
 
+# 创建线程来执行定时检测并发量的任务
+# def fn3():
+#     pid = os.fork()
+#     if pid < 0:
+#         logger.info('create check_count child_process failed!')
+#     elif pid == 0:
+#         check_count()
+
 daemon()
-fn1()
 fn2()
+fn1()
+
+t = Thread(target=check_count)
+t.setDaemon(True)
+t.start()
 
 if __name__ == '__main__':
     # app.run(host='0.0.0.0', port=9995)
