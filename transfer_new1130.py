@@ -5,14 +5,15 @@
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
 '''
-功能说明：主要为4个模块
-模块1 → selectinfo模块为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
-模块2 → storeinfo模块主要是为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
+功能说明：主要为6个模块
+模块1 → selectinfo为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
+模块2 → storeinfo为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
 模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的host_id信息后，将该信息传送给对应的agent主机。
-模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
-模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。每隔30秒触发一次
+模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。默认每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
+模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。默认每隔30秒触发一次
+模块6 → check_agent_sudo为agent提供的接口，agent检测sudu权限是否被修改，若被修改就会调用该接口上传被修改的agent主机的ip地址。
 '''
-import ast
+
 import os
 import sys
 import re
@@ -161,12 +162,8 @@ def storeinfo():
         db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
         cur = db.cursor()
         biz_ip = ''
-        # trigger_cycle_value = 0
-        # trigger_cycle_unit = 0
-        # process_id_list = []
         for msg in total_msg_list:
             process_id = msg.get('id')
-            # process_id_list.append(process_id)
             biz_ip = msg.get('biz_ip')
             manage_ip = msg.get('manage_ip')
             process_name = msg.get('process_name')
@@ -181,6 +178,7 @@ def storeinfo():
             current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             agent_send_time = msg.get('current_time')
             is_alarm = 0
+            is_alive = 1
 
             # 比对主机当前实际进程数与应该有的进程数
             if trigger_compare == 0:    # 如果用户设置的报警值为0，表示大于时触发
@@ -204,9 +202,9 @@ def storeinfo():
             # 如果agent传来的值都存在则进行后续操作
             if process_id and biz_ip and manage_ip and process_name and key_word:
                 # 接收agent传送的信息存入数据库
-                cur.execute("select is_alarm from process_info where process_id = {}".format(process_id))
+                cur.execute("select is_alarm,is_alive from process_info where process_id = {}".format(process_id))
                 alarm_info = cur.fetchall()
-                # 若不存在该报警值说明，该数据是新增的。需要执行添加操作
+                # 若不存在这两个值说明，该数据是新增的。需要执行添加操作
                 if not alarm_info:
                     if is_alarm == 1:
                         if alarm_mode == 2:
@@ -214,13 +212,13 @@ def storeinfo():
                                 biz_ip) + ', agent_send_time:' + str(agent_send_time))
                         logger.info('此处需调用proxy接口，触发报警')
                     # 执行添加数据操作
-                    sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{})".format(
+                    sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{},{})".format(
                         process_id, str(current_time),str(biz_ip), str(manage_ip), str(process_name), str(key_word), trigger_compare, trigger_level,
-                        trigger_cycle_value, trigger_cycle_unit, should_be, new_count, is_alarm)
+                        trigger_cycle_value, trigger_cycle_unit, should_be, new_count, is_alarm, is_alive)
                     cur.execute(sql1)
 
-                # 若存在该报警值说明该数据需要更新， 当原报警值为0（正常）的情况下需要调用proxy的接口触发报警
-                if alarm_info and alarm_info[0][0] == 0:
+                # 若is_alive=1， 且存在该报警值说明该数据需要更新， 当原报警值为0（正常）的情况下需要调用proxy的接口触发报警
+                elif alarm_info[0][1] == 1 and alarm_info[0][0] == 0:
                     if is_alarm == 1:
                         if alarm_mode == 2:
                             logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
@@ -230,8 +228,8 @@ def storeinfo():
                         str(current_time), new_count, is_alarm, process_id)
                     cur.execute(sql2)
 
-                # 若存在该报警值说明该数据需要更新， 当原报警值为1（已报警）的情况下需要调用proxy的接口解除报警
-                if alarm_info and alarm_info[0][0] == 1:
+                # 若is_alive=1， 且存在该报警值说明该数据需要更新， 当原报警值为1（已报警）的情况下需要调用proxy的接口解除报警
+                elif alarm_info[0][1] == 1 and alarm_info[0][0] == 1:
                     if is_alarm == 0:
                         logger.info('---报警已经解除！--- process_id:' + str(process_id) + ', biz_ip:' + str(
                             biz_ip) + ', agent_send_time:' + str(agent_send_time))
@@ -239,24 +237,24 @@ def storeinfo():
                     sql3 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
                         str(current_time), new_count, is_alarm, process_id)
                     cur.execute(sql3)
+
+                # 若is_alive=0， 说明该数据是之前被删除监控的信息， 需要将原数据删掉后新增最新的数据
+                elif alarm_info[0][1] == 0:
+                    if is_alarm == 1:
+                        if alarm_mode == 2:
+                            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
+                                biz_ip) + ', agent_send_time:' + str(agent_send_time))
+                        logger.info('此处需调用proxy接口，触发报警')
+                    # 执行添加数据操作
+                    sql4 = "delete from process_info where process_id = {}".format(process_id)
+                    cur.execute(sql4)
+                    sql5 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{},{})".format(
+                        process_id, str(current_time),str(biz_ip), str(manage_ip), str(process_name), str(key_word), trigger_compare, trigger_level,
+                        trigger_cycle_value, trigger_cycle_unit, should_be, new_count, is_alarm, is_alive)
+                    cur.execute(sql5)
             else:
                 logger.info('the data from agent_ip:' + str(biz_ip) +', process_id:'+ str(process_id) +', is not complete, so save info failed !')
                 return 'upload agent information failed ! maybe some data has been lost,please check agent!'
-
-        # 若传送来的process_id比数据库的少， 说明是删除了监控项， 这时需要根据process_id同步减少process_info表中的进程信息
-        # sql4 = "select process_id from process_info where biz_ip='{}' and trigger_cycle_value={} and trigger_cycle_unit={}".format(biz_ip,trigger_cycle_value,trigger_cycle_unit)
-        # cur.execute(sql4)
-        # process_id_info = cur.fetchall()
-        # process_id_table =[]
-        # for y in process_id_info:
-        #     process_id_table.append(y[0])
-        # difference = set(process_id_table) - set(process_id_list)
-        # if difference:
-        #     for diff_process_id in difference:
-        #         sql5 = "delete from process_info where process_id={}".format(diff_process_id)
-        #         print "sql5 = " + str(sql5)
-        #         cur.execute(sql5)
-        #         logger.info('process_id:'+str(diff_process_id)+', has been deleted from process_info table successful!'+' ip:' + str(biz_ip))
         db.commit()
         cur.close()
         db.close()
@@ -267,6 +265,13 @@ def storeinfo():
         db.close()
         logger.info('storeinfo module connect to oracle fail:'+str(e))
         return 'transfer store info failed ! maybe some error has occur on the transfer,please check transfer!'
+
+# 新增接口，查询agent的sudo权限是否被修改
+@app.route('/check_agent_sudo/', methods=['POST', 'GET'])
+def check_agent_sudo():
+    agent_ip = request.form.get('ip')
+    logger.info("the sudo privilege has been changed !"+" agent_ip:"+str(agent_ip))
+    return "ok"
 
 # 循环接收proxy传来的信息，完善信息后，将信息传送给agent
 def transfer():
@@ -295,25 +300,56 @@ def transfer():
 
 # 具体执行传输任务
 def do_trans(sockfd, data):
-    try:
-        db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
-        cur = db.cursor()
-        cur.execute("select biz_ip from cmdb_host where id=%d"%int(data))
-        agent_ip = cur.fetchall()
-        if not agent_ip:
-            logger.info('the cmdb_host table has no ip info about hostid:' + str(data))
-        else:
-            msg = {"pstatus": 7, 'host_id': data, 'ip': agent_ip[0][0]}
-            agent_ip_port = (agent_ip[0][0], 9997)
-            sockfd.sendto(json.dumps(msg), agent_ip_port)
-            logger.info('the hostid:' + str(data) + ' info has already send to agent successed !')
-    except Exception as e:
-        logger.info('do_trans module connect to oracle db error:' + str(e))
-    finally:
-        cur.close()
-        db.close()
-        sockfd.close()
+    data = json.loads(data)
+    status = data["status"]
+    # 状态码为1时，新增监控进程
+    if status == 1:
+        try:
+            db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+            cur = db.cursor()
+            sql1 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
+            cur.execute(sql1)
+            agent_ip = cur.fetchall()
+            if not agent_ip:
+                logger.info('the cmdb_host table has no ip info about hostid:' + str(data['host_id']))
+            else:
+                msg = {"pstatus": 7, 'host_id': data['host_id'], 'ip': agent_ip[0][0]}
+                agent_ip_port = (agent_ip[0][0], 9997)
+                sockfd.sendto(json.dumps(msg), agent_ip_port)
+                logger.info('add monitor --> the hostid:' + str(data['host_id']) + ' info has already send to agent successed !')
+        except Exception as e:
+            logger.info('do_trans module status=1 , connect to oracle db error:' + str(e))
+        finally:
+            cur.close()
+            db.close()
+            sockfd.close()
 
+    # 状态码为2时，删除监控进程
+    elif status == 2:
+        try:
+            db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+            cur = db.cursor()
+            sql2 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
+            cur.execute(sql2)
+            agent_ip = cur.fetchall()
+            if not agent_ip:
+                logger.info('the cmdb_host table has no ip info about hostid:' + str(data['host_id']))
+            else:
+                msg = {"pstatus": 7, 'host_id': data['host_id'], 'ip': agent_ip[0][0]}
+                agent_ip_port = (agent_ip[0][0], 9997)
+                sockfd.sendto(json.dumps(msg), agent_ip_port)
+                logger.info('delete monitor --> the hostid:' + str(data['host_id']) + ' info has already send to agent successed !')
+            #删除掉process_info表中该进程的相关数据
+            sql3 = "update process_info set is_alive = 0 where process_id = {}".format(int(data["process_id"]))
+            cur.execute(sql3)
+            db.commit()
+            logger.info('already delete process_id: '+str(data["process_id"])+' from process_info table successful!')
+        except Exception as e:
+            logger.info('do_trans module status=2, connect to oracle db error:' + str(e))
+        finally:
+            cur.close()
+            db.close()
+            sockfd.close()
 
 # # 定时遍历数据库，确认agent主机是否掉线
 # def check_agent():
@@ -343,7 +379,7 @@ def do_trans(sockfd, data):
 #             if all_process_ip:
 #                 for x in all_process_ip:
 #                     # 每个主机biz_ip查询1条记录，通过这一条记录来判断主机是否在线
-#                     cur.execute("select * from process_info where biz_ip = '{}' and rownum = 1".format(x[0]))
+#                     cur.execute("select * from process_info where biz_ip = '{}' and is_alive = 1 and rownum = 1".format(x[0]))
 #                     info = cur.fetchall()
 #                     # 获取记录的时间与当前的时间差
 #                     time_diff = now_time - info[0][1]
