@@ -5,13 +5,14 @@
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
 '''
-功能说明：主要为6个模块
+功能说明：主要为7个模块
 模块1 → selectinfo为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
 模块2 → storeinfo为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
-模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的host_id信息后，将该信息传送给对应的agent主机。
+模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的信息后，将该信息传送给对应的agent主机.
 模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。默认每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
 模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。默认每隔30秒触发一次
 模块6 → check_agent_sudo为agent提供的接口，agent检测sudu权限是否被修改，若被修改就会调用该接口上传被修改的agent主机的ip地址。
+模块7 → check_logfile模块主要是每天检查一次log file， 若超出1个月的就删掉。
 '''
 
 import os
@@ -302,6 +303,7 @@ def transfer():
 def do_trans(sockfd, data):
     data = json.loads(data)
     status = data["status"]
+    process_id_list = data["process_id"]
     # 状态码为1时，新增监控进程
     if status == 1:
         try:
@@ -325,12 +327,13 @@ def do_trans(sockfd, data):
             sockfd.close()
 
     # 状态码为2时，删除监控进程
-    elif status == 2:
+    # 状态码为3时，修改监控进程
+    elif status == 2 or status == 3:
         try:
             db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
             cur = db.cursor()
-            sql2 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
-            cur.execute(sql2)
+            sql1 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
+            cur.execute(sql1)
             agent_ip = cur.fetchall()
             if not agent_ip:
                 logger.info('the cmdb_host table has no ip info about hostid:' + str(data['host_id']))
@@ -339,17 +342,23 @@ def do_trans(sockfd, data):
                 agent_ip_port = (agent_ip[0][0], 9997)
                 sockfd.sendto(json.dumps(msg), agent_ip_port)
                 logger.info('delete monitor --> the hostid:' + str(data['host_id']) + ' info has already send to agent successed !')
-            #删除掉process_info表中该进程的相关数据
-            sql3 = "update process_info set is_alive = 0 where process_id = {}".format(int(data["process_id"]))
-            cur.execute(sql3)
-            db.commit()
-            logger.info('already delete process_id: '+str(data["process_id"])+' from process_info table successful!')
+            #删除掉process_info表中该进程的相关数据,实际是将is_alive激活字段的值更改为0
+            #修改process_info表中该进程的相关数据,实际也是将is_alive激活字段的值更改为0,agent上传保存的信息后会自动更新数据
+            for process_id in process_id_list:
+                sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(process_id))
+                cur.execute(sql2)
+                db.commit()
+                if status ==2:
+                    logger.info('already delete process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
+                else:
+                    logger.info('already update process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
         except Exception as e:
-            logger.info('do_trans module status=2, connect to oracle db error:' + str(e))
+            logger.info('do_trans module status == 2 or status == 3, connect to oracle db error:' + str(e))
         finally:
             cur.close()
             db.close()
             sockfd.close()
+
 
 # # 定时遍历数据库，确认agent主机是否掉线
 # def check_agent():
@@ -409,7 +418,7 @@ def do_trans(sockfd, data):
 #             cur.close()
 #             db.close()
 
-# 定时每60秒查询一次当前端口的并发量并记录在文档里面
+# 定时默认每30秒查询一次当前端口的并发量并记录在文档里面
 def check_count():
     with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
         msg = f.read()
@@ -427,7 +436,7 @@ def check_count():
         msg = os.popen('netstat -nat |grep 9995 |wc -l')
         count = msg.read()
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open('/home/opvis/transfer_server/log/check_count_'+str(datetime.date.today())+'.log', 'a') as f:
+        with open('/home/opvis/transfer_server/log/check_count_msg'+str(datetime.date.today())+'.log', 'a') as f:
             f.write(current_time + ', 当前时间的访问量为：' + count)
         msg.close()
         time.sleep(alarm_mode)
@@ -444,7 +453,7 @@ def check_fail_msg():
     except Exception as e:
         logger.info('create check_fail_msg UDP socket error:' + str(e))
     else:
-        lock = Lock()
+        file_lock = Lock()
         while True:
             # 循环接收proxy传来的信息,收到的是json串
             data, addr = sockfd.recvfrom(4096)
@@ -453,19 +462,83 @@ def check_fail_msg():
                 pid = os.fork()
                 if pid == 0:
                     logger.info('already receive fail_msg from agent:' + str(addr[0]))
-                    do_write_fail_msg(data,lock)
+                    do_write_fail_msg(data,file_lock)
                     sys.exit()
                 else:
                     continue
 
 # 具体执行写入文件的任务，需要考虑同步互斥的问题,加锁
-def do_write_fail_msg(data,lock):
+def do_write_fail_msg(data,file_lock):
     data = json.loads(data)
-    with lock:
+    with file_lock:
         with open('/home/opvis/transfer_server/log/agent_fail_msg'+str(datetime.date.today())+'.log','a') as ff:
             for x in data:
                 x=json.loads(x)
                 ff.write(json.dumps(x)+'\n')
+
+# 检测log文件，若超过1个月就删除掉(如：记录到3月后，就删掉1月的记录)
+def check_logfile():
+    while True:
+        # 延时每天执行一次
+        time.sleep(86400)
+        file_list = os.listdir("/home/opvis/transfer_server/log/")
+        list_all = []  #得到需要进行管理的记录
+        delete_data_year = 0
+        delete_data_month = 0
+        for x in file_list:
+            if "msg" in x:
+                list_all.append(x)
+        del_msg = 0
+        month_list = []
+        for y in list_all:
+            data = y.split("msg")
+            data_year = int(data[1][:4])
+            data_month = int(data[1][5:7])
+            month_list.append(data_month)
+            if data_month == 1:
+                delete_data_year = data_year-1
+                delete_data_month = 11
+            elif data_month == 2:
+                delete_data_year = data_year - 1
+                delete_data_month = 12
+            elif data_month == 3:
+                delete_data_year = data_year
+                delete_data_month = 1
+            elif data_month == 4:
+                delete_data_year = data_year
+                delete_data_month = 2
+            elif data_month == 5:
+                delete_data_year = data_year
+                delete_data_month = 3
+            elif data_month == 6:
+                delete_data_year = data_year
+                delete_data_month = 4
+            elif data_month == 7:
+                delete_data_year = data_year
+                delete_data_month = 5
+            elif data_month == 8:
+                delete_data_year = data_year
+                delete_data_month = 6
+            elif data_month == 9:
+                delete_data_year = data_year
+                delete_data_month = 7
+            elif data_month == 10:
+                delete_data_year = data_year
+                delete_data_month = 8
+            elif data_month == 11:
+                delete_data_year = data_year
+                delete_data_month = 9
+            elif data_month == 12:
+                delete_data_year = data_year
+                delete_data_month = 10
+            order1 = "rm -rf /home/opvis/transfer_server/log/agent_fail_msg{}-{}-*".format(delete_data_year,delete_data_month)
+            order2 = "rm -rf /home/opvis/transfer_server/log/check_count_msg{}-{}-*".format(delete_data_year,delete_data_month)
+            if delete_data_month in month_list:
+                del_msg = 1
+            os.system(order1)
+            os.system(order2)
+        if del_msg == 1:
+            logger.info("delete log successful, which existed one month ago! ")
 
 
 # 创建守护进程,让该程序由系统控制，不受用户退出而影响
@@ -517,6 +590,11 @@ fn1()
 t2 = Thread(target=check_count)
 t2.setDaemon(True)
 t2.start()
+
+# 创建一个线程来循环执行检测log文档，超出1个月的就删掉
+t3 = Thread(target=check_logfile)
+t3.setDaemon(True)
+t3.start()
 
 if __name__ == '__main__':
     # app.run(host='0.0.0.0', port=9995)
