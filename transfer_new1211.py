@@ -12,7 +12,7 @@
 模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。默认每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
 模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。默认每隔30秒触发一次
 模块6 → check_agent_sudo为agent提供的接口，agent检测sudu权限是否被修改，若被修改就会调用该接口上传被修改的agent主机的ip地址。
-模块7 → check_logfile模块主要是每天检查一次log file， 若超出1个月的就删掉。
+模块7 → check_logfile模块主要是每天检查一次访问量记录和丢失信息记录， 若超出1个月的就删掉。
 '''
 
 import os
@@ -37,7 +37,8 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 # 日志记录
-with open('transfer_config.txt','r') as f:
+# 先确认主日志保存时间，默认为30天
+with open('transfer_config.txt','a+') as f:
     msg = f.read()
     day = re.findall("log_save_time=\[(.*?)\]",msg)
     if day:
@@ -47,9 +48,8 @@ with open('transfer_config.txt','r') as f:
             day_value = 30
     else:
         day_value = 30
-
 LOG_FILE = "/home/opvis/transfer_server/log/transfer.log"   #日志文档的地址
-if not os.path.exists('/home/opvis/transfer_server/log'):   #如果没有这个路径的话自动创建该路径
+if not os.path.exists('/home/opvis/transfer_server/log/'):   #如果没有这个路径的话自动创建该路径
     os.makedirs('/home/opvis/transfer_server/log/')
 logger = logging.getLogger()                                #创建logging的实例对象
 logger.setLevel(logging.INFO)                               #设置日志保存等级，低于INFO等级就不记录
@@ -81,7 +81,6 @@ app = Flask(__name__)
 #     key_vaule = str(time.time())
 #     return key_vaule
 
-
 @app.route('/selectinfo/', methods=['POST', 'GET'])
 #@cache.cached(timeout=60*2,key_prefix=redis_key)
 # 查询数据库接口，将数据传给agent
@@ -94,43 +93,35 @@ def selectinfo():
         cur = db.cursor()
         count = 0
         for ip in ip_list:
-            cur.execute("select id,biz_ip,manage_ip from cmdb_host where biz_ip='%s'" % ip)
-            host_info = cur.fetchall()
-            if host_info:
+            cur.execute("select * from cmdb_host_process where biz_ip='{}'".format(ip))
+            infos = cur.fetchall()
+            if infos:
+                # 将查询内容反馈给agent
+                D = {}  # 用来装一个进程的信息
+                L = []  # 用来装所有进程信息
+                for x in infos:
+                    D['id'] = x[0]
+                    D['biz_ip'] = x[1]
+                    D['manage_ip'] = x[14]
+                    D['process_name'] = x[2]
+                    D['key_word'] = x[3]
+                    D['trigger_compare'] = x[4]
+                    D['trigger_value'] = x[5]
+                    D['trigger_level'] = x[6]
+                    D['trigger_cycle_value'] = x[8]
+                    D['trigger_cycle_unit'] = x[9]
+                    L.append(D)
+                    D = {}
+                cur.close()
+                db.close()
+                logger.info('selectinfo success to be invoked by ' + str(ip_list))
                 count += 1
-                cur.execute("select * from cmdb_host_process where host_id = %s" %
-                    host_info[0][0])
-                infos = cur.fetchall()
-                if infos:
-                    # 将查询内容反馈给agent
-                    D = {}  # 用来装一个进程的信息
-                    L = []  # 用来装所有进程信息
-                    for x in infos:
-                        D['id'] = x[0]
-                        D['biz_ip'] = host_info[0][1]
-                        D['manage_ip'] = host_info[0][2]
-                        D['process_name'] = x[2]
-                        D['key_word'] = x[3]
-                        D['trigger_compare'] = x[4]
-                        D['trigger_value'] = x[5]
-                        D['trigger_level'] = x[6]
-                        D['trigger_cycle_value'] = x[8]
-                        D['trigger_cycle_unit'] = x[9]
-                        L.append(D)
-                        D = {}
-                    cur.close()
-                    db.close()
-                    logger.info('selectinfo success to be invoked by '+str(ip_list))
-                    return json.dumps(L)
-                # 如果Agent能找到对应的host_id,但找不到对应的进程信息，则返回提示
-                else:
-                    logger.info('No data error 1 --> there is no process info in cmdb_host_process table with agent ips:'+str(ip_list))
-                    return ''
+                return json.dumps(L)
             else:
                 continue
-        # 如果Agent所有ip都没有找到对应的host_id，则返回提示
+        # 如果所有ip都没能找到信息，则返回提示
         if count == 0:
-            logger.info('No data error 2 --> there is no host_id info in cmdb_host table with this agent ips:'+str(ip_list))
+            logger.info('No data error --> there is no process info in cmdb_host_process table with agent ips:' + str(ip_list))
             return ''
     except Exception as e:
         logger.info(' selectinfo module connect to Oracle db has error:' + str(e))
@@ -138,13 +129,12 @@ def selectinfo():
         db.close()
         return ''
 
-
 @app.route('/storeinfo/', methods=['POST','GET'])
 #@cache.cached(timeout=60*2,key_prefix=redis_key)
 # 记录agent传过来的主机信息, 将信息记录到文件
 def storeinfo():
     # 先确认报警模式
-    with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+    with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
         msg = f.read()
         data = re.findall("alarm_mode=\[(.*?)\]", msg)
         if data:
@@ -211,7 +201,7 @@ def storeinfo():
                         if alarm_mode == 2:
                             logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
                                 biz_ip) + ', agent_send_time:' + str(agent_send_time))
-                        logger.info('此处需调用proxy接口，触发报警')
+                        logger.info('此处是该接口第一次触发-----> 触发报警')
                     # 执行添加数据操作
                     sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{},{})".format(
                         process_id, str(current_time),str(biz_ip), str(manage_ip), str(process_name), str(key_word), trigger_compare, trigger_level,
@@ -224,7 +214,7 @@ def storeinfo():
                         if alarm_mode == 2:
                             logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
                                 biz_ip) + ', agent_send_time:' + str(agent_send_time))
-                        logger.info('此处需调用proxy接口-----> 触发报警')
+                        logger.info('此处是该接口第一次触发-----> 触发报警')
                     sql2 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
                         str(current_time), new_count, is_alarm, process_id)
                     cur.execute(sql2)
@@ -234,7 +224,7 @@ def storeinfo():
                     if is_alarm == 0:
                         logger.info('---报警已经解除！--- process_id:' + str(process_id) + ', biz_ip:' + str(
                             biz_ip) + ', agent_send_time:' + str(agent_send_time))
-                        logger.info('此处需调用proxy接口-----> 解除报警')
+                        logger.info('此处是该接口最后一次触发-----> 解除报警')
                     sql3 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
                         str(current_time), new_count, is_alarm, process_id)
                     cur.execute(sql3)
@@ -245,7 +235,7 @@ def storeinfo():
                         if alarm_mode == 2:
                             logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
                                 biz_ip) + ', agent_send_time:' + str(agent_send_time))
-                        logger.info('此处需调用proxy接口，触发报警')
+                        logger.info('此处是该接口第一次触发-----> 触发报警')
                     # 执行添加数据操作
                     sql4 = "delete from process_info where process_id = {}".format(process_id)
                     cur.execute(sql4)
@@ -290,7 +280,7 @@ def transfer():
             # 循环接收proxy传来的信息,收到的是json串
             data, addr = sockfd.recvfrom(4096)
             if data:
-                logger.info('already receive host_id:'+str(data)+' from proxy, start to transfer...... !')
+                logger.info('already receive message:'+str(data)+' from proxy, start to transfer...... !')
                 # 每次收到消息后新建一个子进程来执行传输任务，避免UDP消息冲突而丢失数据
                 pid = os.fork()
                 if pid == 0:
@@ -303,22 +293,22 @@ def transfer():
 def do_trans(sockfd, data):
     data = json.loads(data)
     status = data["status"]
-    process_id_list = data["process_id"]
+    biz_ip = data["biz_ip"]
     # 状态码为1时，新增监控进程
     if status == 1:
         try:
             db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
             cur = db.cursor()
-            sql1 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
+            sql1 = "select * from cmdb_host_process where biz_ip='{}'".format(biz_ip)
             cur.execute(sql1)
-            agent_ip = cur.fetchall()
-            if not agent_ip:
-                logger.info('the cmdb_host table has no ip info about hostid:' + str(data['host_id']))
+            process_list = cur.fetchall()
+            if not process_list:
+                logger.info('the cmdb_host_process table has no process info about biz_id:' + biz_ip)
             else:
-                msg = {"pstatus": 7, 'host_id': data['host_id'], 'ip': agent_ip[0][0]}
-                agent_ip_port = (agent_ip[0][0], 9997)
+                msg = {"pstatus": 7,'ip': biz_ip}
+                agent_ip_port = (biz_ip, 9997)
                 sockfd.sendto(json.dumps(msg), agent_ip_port)
-                logger.info('add monitor --> the hostid:' + str(data['host_id']) + ' info has already send to agent successed !')
+                logger.info('add monitor --> the biz_ip:' + biz_ip + ' info has already send to agent successed !')
         except Exception as e:
             logger.info('do_trans module status=1 , connect to oracle db error:' + str(e))
         finally:
@@ -332,26 +322,25 @@ def do_trans(sockfd, data):
         try:
             db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
             cur = db.cursor()
-            sql1 = "select biz_ip from cmdb_host where id=%d"%int(data['host_id'])
+            sql1 = "select * from cmdb_host_process where biz_ip='{}'".format(biz_ip)
             cur.execute(sql1)
-            agent_ip = cur.fetchall()
-            if not agent_ip:
-                logger.info('the cmdb_host table has no ip info about hostid:' + str(data['host_id']))
+            process_list = cur.fetchall()
+            if not process_list:
+                logger.info('the cmdb_host_process table has no process info about biz_id:' + biz_ip)
             else:
-                msg = {"pstatus": 7, 'host_id': data['host_id'], 'ip': agent_ip[0][0]}
-                agent_ip_port = (agent_ip[0][0], 9997)
+                msg = {"pstatus": 7, 'ip': biz_ip}
+                agent_ip_port = (biz_ip, 9997)
                 sockfd.sendto(json.dumps(msg), agent_ip_port)
-                logger.info('delete monitor --> the hostid:' + str(data['host_id']) + ' info has already send to agent successed !')
+                logger.info('add monitor --> the biz_ip:' + biz_ip + ' info has already send to agent successed !')
             #删除掉process_info表中该进程的相关数据,实际是将is_alive激活字段的值更改为0
             #修改process_info表中该进程的相关数据,实际也是将is_alive激活字段的值更改为0,agent上传保存的信息后会自动更新数据
-            for process_id in process_id_list:
-                sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(process_id))
-                cur.execute(sql2)
-                db.commit()
-                if status ==2:
-                    logger.info('already delete process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
-                else:
-                    logger.info('already update process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
+            sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(data["process_id"]))
+            cur.execute(sql2)
+            db.commit()
+            if status ==2:
+                logger.info('already delete process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
+            else:
+                logger.info('already update process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
         except Exception as e:
             logger.info('do_trans module status == 2 or status == 3, connect to oracle db error:' + str(e))
         finally:
@@ -363,7 +352,7 @@ def do_trans(sockfd, data):
 # # 定时遍历数据库，确认agent主机是否掉线
 # def check_agent():
 #     #先确认循环检测周期时间
-#     with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+#     with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
 #         msg = f.read()
 #         data = re.findall("chenk_agent_cycle=\[(.*?)\]", msg)
 #         if data:
@@ -420,7 +409,7 @@ def do_trans(sockfd, data):
 
 # 定时默认每30秒查询一次当前端口的并发量并记录在文档里面
 def check_count():
-    with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+    with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
         msg = f.read()
         data = re.findall("traffic_triger_cycle=\[(.*?)\]", msg)
         if data:
@@ -577,27 +566,31 @@ def fn2():
     elif pid == 0:
         check_fail_msg()
 
-daemon()
-fn2()
-fn1()
+def main():
+    # 调用创建守护进程
+    daemon()
+    # 调用创建子进程
+    fn2()
+    # 调用创建子进程
+    fn1()
 
-# # 创建一个线程来负责处理周期检查agent是否存在
-# t1 = Thread(target=check_agent)
-# t1.setDaemon(True)
-# t1.start()
+    # # 创建一个线程来负责处理周期检查agent是否存在
+    # t1 = Thread(target=check_agent)
+    # t1.setDaemon(True)
+    # t1.start()
 
-# 创建一个线程来循环执行检测端口的访问量
-t2 = Thread(target=check_count)
-t2.setDaemon(True)
-t2.start()
+    # 创建一个线程来循环执行检测端口的访问量
+    t2 = Thread(target=check_count)
+    t2.setDaemon(True)
+    t2.start()
 
-# 创建一个线程来循环执行检测log文档，超出1个月的就删掉
-t3 = Thread(target=check_logfile)
-t3.setDaemon(True)
-t3.start()
+    # 创建一个线程来循环执行检测log文档，超出1个月的就删掉
+    t3 = Thread(target=check_logfile)
+    t3.setDaemon(True)
+    t3.start()
 
 if __name__ == '__main__':
-    # app.run(host='0.0.0.0', port=9995)
+    main()
     WSGIServer(('0.0.0.0', 9995), app).serve_forever()
 
 
