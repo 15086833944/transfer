@@ -8,8 +8,8 @@ print '连接成功!'
 cursor = conn.cursor()
 
 # 增加信息操作
-sql2 = "alter table process_info add (agent_send_time date)"
-# cursor.execute(sql1)
+# sql2 = "alter table process_info add (agent_send_time date)"
+sql2 = "alter table process_info add (is_alive number(10) default 1 )"
 cursor.execute(sql2)
 
 print '执行添加字段成功！'

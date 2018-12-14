@@ -4,7 +4,6 @@ import pandas
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pylab
-import matplotlib.dates as mdates
 reload(sys)
 sys.setdefaultencoding('utf8')
 
@@ -23,7 +22,7 @@ with open(file,'r') as f:
 pylab.plot(x,y)   #在当前绘图对象绘图（X轴，Y轴，蓝色虚线，线宽度）
 pylab.xlabel("Time(m)") #X轴标签
 pylab.ylabel("Count")  #Y轴标签
-pylab.title("Concurrent table") #图标题
+pylab.title("9994 port visitor volume") #图标题
 # pylab.show()  #显示图
 pylab.savefig("table.png") #保存图
 

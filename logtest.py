@@ -5,16 +5,18 @@
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
 '''
-功能说明：主要为4个模块
-模块1 → selectinfo模块为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
-模块2 → storeinfo模块主要是为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
+功能说明：主要为6个模块
+模块1 → selectinfo为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
+模块2 → storeinfo为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
 模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的host_id信息后，将该信息传送给对应的agent主机。
-模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
-模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。每隔30秒触发一次
+模块4 → check_agent模块主要是定时循环检测agent主机是否保持联系。默认每2分钟执行一次搜索，若主机在监控周期+1分钟后仍没有信息，则判定为失联。
+模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。默认每隔30秒触发一次
+模块6 → check_agent_sudo为agent提供的接口，agent检测sudu权限是否被修改，若被修改就会调用该接口上传被修改的agent主机的ip地址。
 '''
 
 import os
 import sys
+import re
 import time
 import datetime
 from gevent import monkey
@@ -26,25 +28,50 @@ import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from threading import Thread
-# from flask_cache import Cache
 from multiprocessing import Lock
+# from flask_cache import Cache
 # import urllib
 
 reload(sys)
 sys.setdefaultencoding('utf8')
 
 # 日志记录
+with open('transfer_config.txt','r') as f:
+    msg = f.read()
+    day = re.findall("log_save_time=\[(.*?)\]",msg)
+    if day:
+        try:
+            day_value = int(day[0])
+        except:
+            day_value = 30
+    else:
+        day_value = 30
+
+# 主程序日志
 LOG_FILE = "/home/opvis/transfer_server/log/transfer.log"   #日志文档的地址
 if not os.path.exists('/home/opvis/transfer_server/log'):   #如果没有这个路径的话自动创建该路径
     os.makedirs('/home/opvis/transfer_server/log/')
 logger = logging.getLogger()                                #创建logging的实例对象
 logger.setLevel(logging.INFO)                               #设置日志保存等级，低于INFO等级就不记录
-fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=30)  # 以day保存，间隔1天，最多保留30天的日志
+fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=day_value)  # 以day保存，间隔1天，最多保留30天的日志
 datefmt = '%Y-%m-%d %H:%M:%S'                               #定义每条日志的时间显示格式
 format_str = '%(asctime)s %(levelname)s %(message)s '       #定义日志内容显示格式
 formatter = logging.Formatter(format_str, datefmt)          #定义日志前面显示时间， 后面显示内容
 fh.setFormatter(formatter)                                  #执行定义
 logger.addHandler(fh)                                       #执行定义
+
+# 访问量记录日志
+LOG_FILE2 = '/home/opvis/transfer_server/log/check_count.log'   #日志文档的地址
+if not os.path.exists('/home/opvis/transfer_server/log'):   #如果没有这个路径的话自动创建该路径
+    os.makedirs('/home/opvis/transfer_server/log/')
+logcount = logging.getLogger()                                #创建logging的实例对象
+# logcount.setLevel(logging.INFO)                               #设置日志保存等级，低于INFO等级就不记录
+fg = TimedRotatingFileHandler(LOG_FILE2, when='D', interval=1, backupCount=day_value)  # 以day保存，间隔1天，最多保留30天的日志
+datefmt2 = '%Y-%m-%d %H:%M:%S'                               #定义每条日志的时间显示格式
+format_str2 = '%(asctime)s %(message)s '       #定义日志内容显示格式
+formatter2 = logging.Formatter(format_str2, datefmt2)          #定义日志前面显示时间， 后面显示内容
+fg.setFormatter(formatter2)                                  #执行定义
+logcount.addHandler(fg)
 
 monkey.patch_all()
 
@@ -129,89 +156,139 @@ def selectinfo():
 #@cache.cached(timeout=60*2,key_prefix=redis_key)
 # 记录agent传过来的主机信息, 将信息记录到文件
 def storeinfo():
-    # logger.info('storeinfo start to be invoked ......')
-    process_id = request.form.get('id')
-    biz_ip = request.form.get('biz_ip')
-    manage_ip = request.form.get('manage_ip')
-    process_name = request.form.get('process_name')
-    key_word = request.form.get('key_word')
-    trigger_compare = request.form.get('trigger_compare')
-    trigger_value = request.form.get('trigger_value')
-    trigger_level = request.form.get('trigger_level')
-    trigger_cycle_value = request.form.get('trigger_cycle_value')
-    trigger_cycle_unit = request.form.get('trigger_cycle_unit')
-    should_be = request.form.get('should_be')
-    new_count = request.form.get('new_count')
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    agent_send_time = request.form.get('current_time')
-    is_alarm = 0
+    # 先确认报警模式
+    with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+        msg = f.read()
+        data = re.findall("alarm_mode=\[(.*?)\]", msg)
+        if data:
+            try:
+                alarm_mode = int(data[0])
+                if alarm_mode not in [1,2]:
+                    alarm_mode = 1
+            except:
+                alarm_mode = 1
+        else:
+            alarm_mode = 1
+    # 获取agent上传的信息
+    total_msg = request.form.get('msg')
+    total_msg_list = json.loads(total_msg)
+    try:
+        db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+        cur = db.cursor()
+        biz_ip = ''
+        # trigger_cycle_value = 0
+        # trigger_cycle_unit = 0
+        # process_id_list = []
+        for msg in total_msg_list:
+            process_id = msg.get('id')
+            # process_id_list.append(process_id)
+            biz_ip = msg.get('biz_ip')
+            manage_ip = msg.get('manage_ip')
+            process_name = msg.get('process_name')
+            key_word = msg.get('key_word')
+            trigger_compare = msg.get('trigger_compare')
+            trigger_value = msg.get('trigger_value')
+            trigger_level = msg.get('trigger_level')
+            trigger_cycle_value = msg.get('trigger_cycle_value')
+            trigger_cycle_unit = msg.get('trigger_cycle_unit')
+            should_be = msg.get('should_be')
+            new_count = msg.get('new_count')
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            agent_send_time = msg.get('current_time')
+            is_alarm = 0
 
-    # 比对主机当前实际进程数与应该有的进程数
-    if trigger_compare == 0:    # 如果用户设置的报警值为0，表示大于时触发
-        if new_count > should_be:
-            is_alarm = 1
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
-                biz_ip) + ', agent_send_time:' + str(agent_send_time))
-    elif trigger_compare == 2:  # 如果用户设置的报警值为2，表示等于时触发
-        if new_count == should_be:
-            is_alarm = 1
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
-                biz_ip) + ', agent_send_time:' + str(agent_send_time))
-    else:                       # 如果设置为其他，表示小于时触发
-        if new_count < should_be:
-            is_alarm = 1
-            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
-                biz_ip) + ', agent_send_time:' + str(agent_send_time))
-
-    # 如果agent传来的值都存在则进行后续操作
-    if id and biz_ip and manage_ip and process_name and key_word and trigger_compare and trigger_value and (
-        trigger_level and trigger_cycle_value and trigger_cycle_unit and should_be and new_count and current_time):
-        # 接收agent传送的信息存入数据库
-        try:
-            db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
-            cur = db.cursor()
-            cur.execute("select is_alarm from process_info where process_id = {}".format(process_id))
-            alarm_info = cur.fetchall()
-            # 若不存在该报警值说明，该数据是新增的。需要执行添加操作
-            if not alarm_info:
-                if is_alarm == 1:
-                    logger.info('此处需调用proxy接口，触发报警')
-                # 执行添加数据操作
-                sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{})".format(
-                    process_id, str(current_time),str(biz_ip), str(manage_ip), str(process_name), str(key_word), trigger_compare, trigger_level,
-                    trigger_cycle_value, trigger_cycle_unit, should_be, new_count, is_alarm)
-                cur.execute(sql1)
-
-            # 若存在该报警值说明该数据需要更新， 当原报警值为0（正常）的情况下需要调用proxy的接口触发报警
-            if alarm_info and alarm_info[0][0] == 0:
-                if is_alarm == 1:
-                    logger.info('此处需调用proxy接口-----> 触发报警')
-                sql2 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
-                    str(current_time), new_count, is_alarm, process_id)
-                cur.execute(sql2)
-
-            # 若存在该报警值说明该数据需要更新， 当原报警值为1（已报警）的情况下需要调用proxy的接口解除报警
-            if alarm_info and alarm_info[0][0] == 1:
-                if is_alarm == 0:
-                    logger.info('---报警已经解除！--- process_id:' + str(process_id) + ', biz_ip:' + str(
+            # 比对主机当前实际进程数与应该有的进程数
+            if trigger_compare == 0:    # 如果用户设置的报警值为0，表示大于时触发
+                if int(new_count) > int(should_be):
+                    is_alarm = 1
+                    if alarm_mode == 1:
+                        logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
                         biz_ip) + ', agent_send_time:' + str(agent_send_time))
-                    logger.info('此处需调用proxy接口-----> 解除报警')
-                sql3 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
-                    str(current_time), new_count, is_alarm, process_id)
-                cur.execute(sql3)
-            db.commit()
-            cur.close()
-            db.close()
-            logger.info('storeinfo success to be invoked by ip:' + str(biz_ip))
-            return 'ok'
-        except Exception as e:
-            cur.close()
-            db.close()
-            logger.info('storeinfo module connect to oracle fail:'+str(e))
-            return 'transfer store info failed ! maybe some error has occur on the transfer,please check transfer!'
-    else:
-        logger.info('the data from agent_ip:'+str(biz_ip)+', is not complete, so save info failed !')
-        return 'upload agent information failed ! maybe some data has been lost,please check agent!'
+            elif trigger_compare == 2:  # 如果用户设置的报警值为2，表示等于时触发
+                if int(new_count) == int(should_be):
+                    is_alarm = 1
+                    if alarm_mode == 1:
+                        logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
+                        biz_ip) + ', agent_send_time:' + str(agent_send_time))
+            else:                       # 如果设置为其他，表示小于时触发
+                if int(new_count) < int(should_be):
+                    is_alarm = 1
+                    if alarm_mode == 1:
+                        logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
+                        biz_ip) + ', agent_send_time:' + str(agent_send_time))
+            # 如果agent传来的值都存在则进行后续操作
+            if process_id and biz_ip and manage_ip and process_name and key_word:
+                # 接收agent传送的信息存入数据库
+                cur.execute("select is_alarm from process_info where process_id = {}".format(process_id))
+                alarm_info = cur.fetchall()
+                # 若不存在该报警值说明，该数据是新增的。需要执行添加操作
+                if not alarm_info:
+                    if is_alarm == 1:
+                        if alarm_mode == 2:
+                            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
+                                biz_ip) + ', agent_send_time:' + str(agent_send_time))
+                        logger.info('此处需调用proxy接口，触发报警')
+                    # 执行添加数据操作
+                    sql1 = "insert into process_info values({},to_date('{}','yyyy-mm-dd hh24:mi:ss'),'{}','{}','{}',{},{},{},{},{},{},{},{})".format(
+                        process_id, str(current_time),str(biz_ip), str(manage_ip), str(process_name), str(key_word), trigger_compare, trigger_level,
+                        trigger_cycle_value, trigger_cycle_unit, should_be, new_count, is_alarm)
+                    cur.execute(sql1)
+
+                # 若存在该报警值说明该数据需要更新， 当原报警值为0（正常）的情况下需要调用proxy的接口触发报警
+                if alarm_info and alarm_info[0][0] == 0:
+                    if is_alarm == 1:
+                        if alarm_mode == 2:
+                            logger.info('***报警值已触发！请注意！*** process_id:' + str(process_id) + ', biz_ip:' + str(
+                                biz_ip) + ', agent_send_time:' + str(agent_send_time))
+                        logger.info('此处需调用proxy接口-----> 触发报警')
+                    sql2 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
+                        str(current_time), new_count, is_alarm, process_id)
+                    cur.execute(sql2)
+
+                # 若存在该报警值说明该数据需要更新， 当原报警值为1（已报警）的情况下需要调用proxy的接口解除报警
+                if alarm_info and alarm_info[0][0] == 1:
+                    if is_alarm == 0:
+                        logger.info('---报警已经解除！--- process_id:' + str(process_id) + ', biz_ip:' + str(
+                            biz_ip) + ', agent_send_time:' + str(agent_send_time))
+                        logger.info('此处需调用proxy接口-----> 解除报警')
+                    sql3 = "update process_info set report_time = to_date('{}','yyyy-mm-dd hh24:mi:ss'),current_count = {},is_alarm = {} where process_id = {}".format(
+                        str(current_time), new_count, is_alarm, process_id)
+                    cur.execute(sql3)
+            else:
+                logger.info('the data from agent_ip:' + str(biz_ip) +', process_id:'+ str(process_id) +', is not complete, so save info failed !')
+                return 'upload agent information failed ! maybe some data has been lost,please check agent!'
+
+        # 若传送来的process_id比数据库的少， 说明是删除了监控项， 这时需要根据process_id同步减少process_info表中的进程信息
+        # sql4 = "select process_id from process_info where biz_ip='{}' and trigger_cycle_value={} and trigger_cycle_unit={}".format(biz_ip,trigger_cycle_value,trigger_cycle_unit)
+        # cur.execute(sql4)
+        # process_id_info = cur.fetchall()
+        # process_id_table =[]
+        # for y in process_id_info:
+        #     process_id_table.append(y[0])
+        # difference = set(process_id_table) - set(process_id_list)
+        # if difference:
+        #     for diff_process_id in difference:
+        #         sql5 = "delete from process_info where process_id={}".format(diff_process_id)
+        #         print "sql5 = " + str(sql5)
+        #         cur.execute(sql5)
+        #         logger.info('process_id:'+str(diff_process_id)+', has been deleted from process_info table successful!'+' ip:' + str(biz_ip))
+        db.commit()
+        cur.close()
+        db.close()
+        logger.info('storeinfo success to be invoked by ip:' + str(biz_ip))
+        return 'ok'
+    except Exception as e:
+        cur.close()
+        db.close()
+        logger.info('storeinfo module connect to oracle fail:'+str(e))
+        return 'transfer store info failed ! maybe some error has occur on the transfer,please check transfer!'
+
+# 新增接口，查询agent的sudo权限是否被修改
+@app.route('/check_agent_sudo/', methods=['POST', 'GET'])
+def check_agent_sudo():
+    agent_ip = request.form.get('ip')
+    logger.info("the sudo privilege has been changed !"+" agent_ip:"+str(agent_ip))
+    return "ok"
 
 # 循环接收proxy传来的信息，完善信息后，将信息传送给agent
 def transfer():
@@ -262,9 +339,22 @@ def do_trans(sockfd, data):
 
 # # 定时遍历数据库，确认agent主机是否掉线
 # def check_agent():
+#     #先确认循环检测周期时间
+#     with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+#         msg = f.read()
+#         data = re.findall("chenk_agent_cycle=\[(.*?)\]", msg)
+#         if data:
+#             try:
+#                 chenk_cycle = int(data[0])
+#                 if chenk_cycle < 60:
+#                     chenk_cycle = 120
+#             except:
+#                 chenk_cycle = 120
+#         else:
+#             chenk_cycle = 120
 #     while True:
-#         # 每隔120秒执行一次
-#         time.sleep(120)
+#         # 每隔chenk_cycle秒执行一次
+#         time.sleep(chenk_cycle)
 #         try:
 #             now_time = datetime.datetime.now()
 #             db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
@@ -307,14 +397,24 @@ def do_trans(sockfd, data):
 
 # 定时每60秒查询一次当前端口的并发量并记录在文档里面
 def check_count():
+    with open('/home/opvis/transfer_server/transfer_config.txt', 'r') as f:
+        msg = f.read()
+        data = re.findall("traffic_triger_cycle=\[(.*?)\]", msg)
+        if data:
+            try:
+                alarm_mode = int(data[0])
+                if alarm_mode < 10 or alarm_mode > 60:
+                    alarm_mode = 30
+            except:
+                alarm_mode = 30
+        else:
+            alarm_mode = 30
     while True:
         msg = os.popen('netstat -nat |grep 9995 |wc -l')
         count = msg.read()
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open('/home/opvis/transfer_server/log/check_count_'+str(datetime.date.today())+'.log', 'a') as f:
-            f.write(current_time + ', 当前时间的访问量为：' + count)
+        logcount.info(', 当前时间的访问量为：' + count)
         msg.close()
-        time.sleep(50)
+        time.sleep(alarm_mode)
 
 # 搜集agent传输失败的信息
 def check_fail_msg():
@@ -336,7 +436,7 @@ def check_fail_msg():
                 # 每次收到消息后新建一个子进程来执行传输任务，避免UDP消息冲突而丢失数据
                 pid = os.fork()
                 if pid == 0:
-                    logger.info('already receive fail_msg from agent:' + str(addr))
+                    logger.info('already receive fail_msg from agent:' + str(addr[0]))
                     do_write_fail_msg(data,lock)
                     sys.exit()
                 else:
@@ -344,11 +444,12 @@ def check_fail_msg():
 
 # 具体执行写入文件的任务，需要考虑同步互斥的问题,加锁
 def do_write_fail_msg(data,lock):
-    data = json.dumps(data)
+    data = json.loads(data)
     with lock:
         with open('/home/opvis/transfer_server/log/agent_fail_msg'+str(datetime.date.today())+'.log','a') as ff:
             for x in data:
-                ff.write(x)
+                x=json.loads(x)
+                ff.write(json.dumps(x)+'\n')
 
 
 # 创建守护进程,让该程序由系统控制，不受用户退出而影响
