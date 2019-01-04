@@ -13,6 +13,7 @@
 模块5 → check_count模块主要是定时循环检测当前端口号9995的并发访问量是多少。默认每隔30秒触发一次
 模块6 → check_agent_sudo为agent提供的接口，agent检测sudu权限是否被修改，若被修改就会调用该接口上传被修改的agent主机的ip地址。
 模块7 → check_logfile模块主要是每天检查一次访问量记录和丢失信息记录， 若超出1个月的就删掉。
+模块8......
 '''
 
 import os
@@ -337,6 +338,62 @@ def debug_info():
             logging.info("the debug_info module has error:"+str(e))
             return 'debug_info search info failed ! please check the transfer'
 
+# 新增接口，接收agent定点监控的结果
+@app.route('/fixed_point_result/', methods=['POST', 'GET'])
+def debug_online():
+    id = request.form.get('id')
+    result = request.form.get('result').strip()
+    update_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if id:
+        # 存入数据库
+        try:
+            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
+            cur = db.cursor()
+            sql1 = "update fixed_point_monitor set execute_result='{}',update_time=to_date('{}'," \
+                           "'yyyy-mm-dd hh24:mi:ss') where flow_id='{}'".format(result,str(update_time),id)
+            cur.execute(sql1)
+            db.commit()
+            cur.close()
+            db.close()
+            logging.info("already update fixed_point_result info of flow_id: {}".format(id))
+            return "ok"
+        except Exception as e:
+            cur.close()
+            db.close()
+            logging.info("the fixed_point_result module has error:" + str(e))
+            return 'fixed_point_result result store failed ! please check the transfer'
+    else:
+        logging.info("the fixed_point_result message has something wrong!")
+        return "the fixed_point_result message has something wrong!"
+
+# 新增接口，将定点监控的信息反馈给agent
+@app.route('/fixed_point_data/', methods=['POST', 'GET'])
+def fixed_point_data():
+    id = request.form.get('id')
+    if id:
+        # 从数据库将该ID相关在线调试的信息查出来给agent
+        try:
+            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
+            cur = db.cursor()
+            sql1 = "select execute_cycle,data from fixed_point_monitor where flow_id='{}'".format(id)
+            cur.execute(sql1)
+            info = cur.fetchall()
+            if info:
+                total_info = {
+                    "execute_cycle": info[0][0],
+                    "data": info[0][1].read(),
+                }
+                logging.info('the fixed_point_data info use HTTP return to agent successful!')
+                return json.dumps(total_info)
+            else:
+                logging.info('the database has no fixed_point_data of flow_id:{}'.format(id))
+                return 'the database has no fixed_point_data of flow_id:{}'.format(id)
+        except Exception as e:
+            cur.close()
+            db.close()
+            logging.info("the fixed_point_data module has error:" + str(e))
+            return 'fixed_point_data search info failed ! please check the transfer'
+
 # 循环接收proxy传来的信息，完善信息后，将信息传送给agent
 def transfer():
     HOST = '0.0.0.0'
@@ -431,6 +488,14 @@ def do_trans(sockfd, data):
         agent_ip_port = (biz_ip, 9997)
         sockfd.sendto(json.dumps(msg), agent_ip_port)
         logging.info("debug_online info use UDP send to agent:{} successful!".format(biz_ip))
+
+    # 状态码为5时， 表示需要执行定点调试功能
+    elif status == 5:
+        biz_ip = data["biz_ip"]
+        msg = {'status':10, 'id':data["id"]}
+        agent_ip_port = (biz_ip, 9997)
+        sockfd.sendto(json.dumps(msg), agent_ip_port)
+        logging.info("fixed_point_monitor info use UDP send to agent:{} successful!".format(biz_ip))
 
 
 # # 定时遍历数据库，确认agent主机是否掉线
