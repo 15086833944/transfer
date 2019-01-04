@@ -5,7 +5,7 @@
 # work env: python2.7+Oracle(cx_Oracle)+flask+gevent
 
 '''
-功能说明：主要为7个模块
+功能说明：主要为7个模块,兼容linux系统和windows系统
 模块1 → selectinfo为agent提供接口，需接收到调用者的ip信息，为调用者反馈数据库中该主机相关的所有进程信息。
 模块2 → storeinfo为agent提供的接口，保存agent上报的数据，存入数据库。后期进行数据处理
 模块3 → transfer模块主要是信息转接的作用，接收到proxy传输的信息后，将该信息传送给对应的agent主机.
@@ -15,10 +15,10 @@
 模块7 → check_logfile模块主要是每天检查一次访问量记录和丢失信息记录， 若超出1个月的就删掉。
 '''
 
-
 import os
 import sys
 import re
+import platform
 import time
 import datetime
 from gevent import monkey
@@ -30,17 +30,46 @@ import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from threading import Thread
-from multiprocessing import Lock
+from multiprocessing import Lock,Process
 # from flask_cache import Cache
 # import urllib
-
 
 reload(sys)
 sys.setdefaultencoding('utf8')
 
+
+# 确认系统是Windows还是Linux
+if platform.system() == "Windows":
+    if not os.path.exists("D:\\transfer_server\\log\\"):
+        os.makedirs("D:\\transfer_server\\log\\")
+    log_path = "D:\\transfer_server\\log\\"
+    config_path = "D:\\transfer_server\\"
+else:
+    if not os.path.exists('/home/opvis/transfer_server/log/'):
+        os.makedirs('/home/opvis/transfer_server/log/')
+    log_path = "/home/opvis/transfer_server/log/"
+    config_path = "/home/opvis/transfer_server/"
+
+# 由于每个机房数据库账号密码不一样，所以需要确认数据库账号密码和库名
+db_user = ''
+db_pwd = ''
+db_name = ''
+db_list = [('umsproxy','"UMsproXY@)!*"','preumsproxy'),
+           ('umsproxy','ums1234','umsproxy'),
+           ('umsproxy','ums1234','umstest')]
+for x in db_list:
+    try:
+        conn = cx_Oracle.connect(x[0],x[1], '127.0.0.1:1521/'+x[2])
+        db_user = x[0]
+        db_pwd = x[1]
+        db_name = x[2]
+        conn.close()
+    except:
+        continue
+
 # 日志记录
 # 先确认主日志保存时间，默认为30天
-with open('transfer_config.txt','a+') as f:
+with open(config_path+'transfer_config.txt','a+') as f:
     msg = f.read()
     day = re.findall("log_save_time=\[(.*?)\]",msg)
     if day:
@@ -50,12 +79,10 @@ with open('transfer_config.txt','a+') as f:
             day_value = 30
     else:
         day_value = 30
-LOG_FILE = "/home/opvis/transfer_server/log/transfer.log"   #日志文档的地址
-if not os.path.exists('/home/opvis/transfer_server/log/'):   #如果没有这个路径的话自动创建该路径
-    os.makedirs('/home/opvis/transfer_server/log/')
+LOG_FILE = log_path + "transfer.log"   #日志文档的地址
 logger = logging.getLogger()                                #创建logging的实例对象
 logger.setLevel(logging.INFO)                               #设置日志保存等级，低于INFO等级就不记录
-fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=day_value)  # 以day保存，间隔1天，最多保留30天的日志
+fh = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=day_value) # 以day保存，间隔1天，最多保留30天的日志
 datefmt = '%Y-%m-%d %H:%M:%S'                               #定义每条日志的时间显示格式
 format_str = '%(asctime)s %(levelname)s %(message)s '       #定义日志内容显示格式
 formatter = logging.Formatter(format_str, datefmt)          #定义日志前面显示时间， 后面显示内容
@@ -91,7 +118,7 @@ def selectinfo():
     ip_list = ips.split(',')[0:-1]
     # logger.info('selectinfo start to be invoked ......by'+str(ip_list))
     try:
-        db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+        db = cx_Oracle.connect(db_user,db_pwd,'127.0.0.1:1521/'+db_name)
         cur = db.cursor()
         count = 0
         for ip in ip_list:
@@ -136,7 +163,7 @@ def selectinfo():
 # 记录agent传过来的主机信息, 将信息记录到文件
 def storeinfo():
     # 先确认报警模式
-    with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
+    with open(config_path+'transfer_config.txt', 'a+') as f:
         msg = f.read()
         data = re.findall("alarm_mode=\[(.*?)\]", msg)
         if data:
@@ -152,7 +179,7 @@ def storeinfo():
     total_msg = request.form.get('msg')
     total_msg_list = json.loads(total_msg)
     try:
-        db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+        db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
         cur = db.cursor()
         biz_ip = ''
         for msg in total_msg_list:
@@ -299,7 +326,7 @@ def do_trans(sockfd, data):
     # 状态码为1时，新增监控进程
     if status == 1:
         try:
-            db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
             cur = db.cursor()
             sql1 = "select * from cmdb_host_process where biz_ip='{}'".format(biz_ip)
             cur.execute(sql1)
@@ -322,7 +349,7 @@ def do_trans(sockfd, data):
     # 状态码为3时，修改监控进程
     elif status == 2 or status == 3:
         try:
-            db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
             cur = db.cursor()
             sql1 = "select * from cmdb_host_process where biz_ip='{}'".format(biz_ip)
             cur.execute(sql1)
@@ -333,7 +360,10 @@ def do_trans(sockfd, data):
                 msg = {"pstatus": 7, 'ip': biz_ip}
                 agent_ip_port = (biz_ip, 9997)
                 sockfd.sendto(json.dumps(msg), agent_ip_port)
-                logger.info('add monitor --> the biz_ip:' + biz_ip + ' info has already send to agent successed !')
+                if status == 2:
+                    logger.info('dell monitor --> the biz_ip:' + biz_ip + ' info has already send to agent successed !')
+                else:
+                    logger.info('update monitor --> the biz_ip:' + biz_ip + ' info has already send to agent successed !')
             #删除掉process_info表中该进程的相关数据,实际是将is_alive激活字段的值更改为0
             #修改process_info表中该进程的相关数据,实际也是将is_alive激活字段的值更改为0,agent上传保存的信息后会自动更新数据
             sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(data["process_id"]))
@@ -354,7 +384,7 @@ def do_trans(sockfd, data):
 # # 定时遍历数据库，确认agent主机是否掉线
 # def check_agent():
 #     #先确认循环检测周期时间
-#     with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
+#     with open(config_path+'transfer_config.txt', 'a+') as f:
 #         msg = f.read()
 #         data = re.findall("chenk_agent_cycle=\[(.*?)\]", msg)
 #         if data:
@@ -371,7 +401,7 @@ def do_trans(sockfd, data):
 #         time.sleep(chenk_cycle)
 #         try:
 #             now_time = datetime.datetime.now()
-#             db = cx_Oracle.connect('umsproxy', '"UMsproXY@)!*"', '127.0.0.1:1521/preumsproxy')
+#             db = cx_Oracle.connect(db_user,db_pwd,'127.0.0.1:1521/'+db_name)
 #             cur = db.cursor()
 #             # 搜索所有的主机biz_ip
 #             cur.execute("select distinct biz_ip from process_info")
@@ -411,7 +441,7 @@ def do_trans(sockfd, data):
 
 # 定时默认每30秒查询一次当前端口的并发量并记录在文档里面
 def check_count():
-    with open('/home/opvis/transfer_server/transfer_config.txt', 'a+') as f:
+    with open(config_path+'transfer_config.txt', 'a+') as f:
         msg = f.read()
         data = re.findall("traffic_triger_cycle=\[(.*?)\]", msg)
         if data:
@@ -424,11 +454,14 @@ def check_count():
         else:
             alarm_mode = 30
     while True:
-        msg = os.popen('netstat -nat |grep 9995 |wc -l')
-        count = msg.read()
+        if platform.system() == "Windows":
+            msg = os.popen('netstat -nat | find /c "9995"')       # Windows系统下的端口访问量
+        else:
+            msg = os.popen('netstat -nat | grep 9995 |wc -l')     #linux系统下的端口访问量
+        count = int(msg.read())
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open('/home/opvis/transfer_server/log/check_count_msg'+str(datetime.date.today())+'.log', 'a') as f:
-            f.write(current_time + ', 当前时间的访问量为：' + count)
+        with open(log_path+'check_count_msg'+str(datetime.date.today())+'.log', 'a') as f:
+            f.write(current_time + ', 当前时间的访问量为：' + str(count) + '\n')
         msg.close()
         time.sleep(alarm_mode)
 
@@ -462,7 +495,7 @@ def check_fail_msg():
 def do_write_fail_msg(data,file_lock):
     data = json.loads(data)
     with file_lock:
-        with open('/home/opvis/transfer_server/log/agent_fail_msg'+str(datetime.date.today())+'.log','a') as ff:
+        with open(log_path+'agent_fail_msg'+str(datetime.date.today())+'.log','a') as ff:
             for x in data:
                 x=json.loads(x)
                 ff.write(json.dumps(x)+'\n')
@@ -472,7 +505,7 @@ def check_logfile():
     while True:
         # 延时每天执行一次
         time.sleep(86400)
-        file_list = os.listdir("/home/opvis/transfer_server/log/")
+        file_list = os.listdir(log_path)
         list_all = []  #得到需要进行管理的记录
         delete_data_year = 0
         delete_data_month = 0
@@ -522,8 +555,12 @@ def check_logfile():
             elif data_month == 12:
                 delete_data_year = data_year
                 delete_data_month = 10
-            order1 = "rm -rf /home/opvis/transfer_server/log/agent_fail_msg{}-{}-*".format(delete_data_year,delete_data_month)
-            order2 = "rm -rf /home/opvis/transfer_server/log/check_count_msg{}-{}-*".format(delete_data_year,delete_data_month)
+            if platform.system() == "Windows":
+                order1 = "del " + log_path + "agent_fail_msg{0}-{1:02d}-*".format(delete_data_year, delete_data_month)
+                order2 = "del " + log_path + "check_count_msg{0}-{1:02d}-*".format(delete_data_year, delete_data_month)
+            else:
+                order1 = "rm -rf "+log_path+"agent_fail_msg{0}-{1:02d}-*".format(delete_data_year,delete_data_month)
+                order2 = "rm -rf "+log_path+"check_count_msg{0}-{1:02d}-*".format(delete_data_year,delete_data_month)
             if delete_data_month in month_list:
                 del_msg = 1
             os.system(order1)
@@ -552,29 +589,27 @@ def daemon():
         logging.info("create second fork failed!"+str(e))
         sys.exit(1)
 
-# 创建子进程来负责处理proxy的信息
-def fn1():
-    pid = os.fork()
-    if pid < 0:
-        logger.info('create transfer child_process failed!')
-    elif pid == 0:
-        transfer()
-
-# 创建子进程来循环接收agent传来的失败的记录信息
-def fn2():
-    pid = os.fork()
-    if pid < 0:
-        logger.info('create check_agent child_process failed!')
-    elif pid == 0:
-        check_fail_msg()
 
 def main():
-    # 调用创建守护进程
-    daemon()
-    # 调用创建子进程
-    fn2()
-    # 调用创建子进程
-    fn1()
+    # 如果是在Window环境下就让程序在后台运行
+    if platform.system() == "Windows":
+        import win32api, win32gui
+        ct = win32api.GetConsoleTitle()
+        hd = win32gui.FindWindow(0,ct)
+        win32gui.ShowWindow(hd,0)
+    else:
+        # 如果是在Linux环境下就调用创建守护进程
+        daemon()
+
+    # 创建子进程来负责处理proxy的信息
+    p1 = Process(target=transfer)
+    p1.daemon = True
+    p1.start()
+
+    # 创建子进程来循环接收agent传来的失败的记录信息
+    p2 = Process(target=check_fail_msg)
+    p2.daemon = True
+    p2.start()
 
     # # 创建一个线程来负责处理周期检查agent是否存在
     # t1 = Thread(target=check_agent)
