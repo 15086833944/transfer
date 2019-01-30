@@ -52,7 +52,7 @@ for x in db_list:
 
 # 日志按照文件大小来切分,所有日志
 logfile_info = log_path + "transfer.log"
-info_filesize = 10*1024*1024
+info_filesize = 100*1024*1024
 log_info = logging.getLogger()
 info_handler = ConcurrentRotatingFileHandler(logfile_info, "a", info_filesize, encoding="utf-8",backupCount=30)
 datefmt_str1 = '%Y-%m-%d %H:%M:%S'
@@ -64,7 +64,7 @@ log_info.setLevel(logging.INFO)
 
 # error日志
 logfile_error = log_path + "transfer_error.log"
-error_filesize = 2*1024*1024
+error_filesize = 20*1024*1024
 log_error = logging.getLogger()
 error_handler = ConcurrentRotatingFileHandler(logfile_error, "a", error_filesize, encoding="utf-8",backupCount=30)
 datefmt_str2 = '%Y-%m-%d %H:%M:%S'
@@ -90,7 +90,7 @@ def selectinfo():
         count = 0
         for ip in ip_list:
             sql = "select id,biz_ip,manage_ip,process_name,key_word,trigger_compare,trigger_value,trigger_level," \
-                  "trigger_cycle_value,trigger_cycle_unit from cmdb_host_process where biz_ip='{}'".format(ip)
+                  "trigger_cycle_value,trigger_cycle_unit from cmdb_host_process where biz_ip='{}' and is_alive=1".format(ip)
             cur.execute(sql)
             infos = cur.fetchall()
             if infos:
@@ -119,10 +119,10 @@ def selectinfo():
                 continue
         # 如果所有ip都没能找到信息，则返回提示
         if count == 0:
-            logging.error('No data error --> there is no process info in cmdb_host_process table with agent ips:' + str(ip_list))
+            logging.info('No data --> there is no process info in cmdb_host_process table with agent ips:' + str(ip_list))
             return 'no data'
     except Exception as e:
-        logging.error(' selectinfo module connect to Oracle db has error:' + str(e))
+        logging.error(' selectinfo module has error:' + str(e))
         return ''
 
 @app.route('/storeinfo/', methods=['POST','GET'])
@@ -270,23 +270,26 @@ def debug_online():
         try:
             db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
             cur = db.cursor()
-            sql1 = ''
             if have_result == 1:    # 如果正常执行完
                 if result:          # 如果结果不为空时，更新结果， 状态， 和时间
-                    sql1 = "update debug_online set execute_result='{}',overt_alarm={},update_time=to_date('{}'," \
-                           "'yyyy-mm-dd hh24:mi:ss') where flow_id='{}'".format(result,have_result,str(update_time),id)
+                    clob_data = cur.var(cx_Oracle.CLOB)    #存入超过4000字节的大数据时，必须先将数据转换成clob对象
+                    clob_data.setvalue(0,result)
+                    sql1 = "update debug_online set execute_result=(:1),overt_alarm={},update_time=to_date('{}'," \
+                           "'yyyy-mm-dd hh24:mi:ss') where flow_id='{}'".format(have_result,str(update_time),id)
+                    pares = [result]
+                    cur.execute(sql1,pares)
                 else:               # 如果结果为空时， 更新状态， 和时间
                     sql1 = "update debug_online set overt_alarm={},update_time=to_date('{}','yyyy-mm-dd hh24:mi:ss')" \
                            " where flow_id='{}'".format(have_result,str(update_time),id)
+                    cur.execute(sql1)
             elif have_result == 2:  # 如果超时后， 更新状态， 和时间
                 sql1 = "update debug_online set overt_alarm={},update_time=to_date('{}','yyyy-mm-dd hh24:mi:ss')" \
                        " where flow_id='{}'".format(have_result,str(update_time), id)
-
-            cur.execute(sql1)
+                cur.execute(sql1)
             db.commit()
             cur.close()
             db.close()
-            logging.info("already update online_debug info of flow_id: {}".format(id))
+            logging.info("already update debug_onine info of flow_id: {}".format(id))
             return "ok"
         except Exception as e:
             logging.error("the online_debug module has error:"+str(e))
@@ -432,42 +435,59 @@ def do_trans(sockfd, data):
                 msg = {"pstatus": 7,'ip': biz_ip}
                 agent_ip_port = (biz_ip, 9997)
                 sockfd.sendto(json.dumps(msg), agent_ip_port)
-                logging.info('add monitor --> the biz_ip:' + biz_ip + ' info use UDP already send to agent successed !')
+                logging.info('add monitor --> add info already use UDP send to the biz_ip:' + biz_ip + ' successful !')
         except Exception as e:
-            logging.error('do_trans module status=1 , connect to oracle db error:' + str(e))
+            logging.error('do_trans module status=1 , has error:' + str(e))
         finally:
             sockfd.close()
 
-    # 状态码为2时，删除监控进程
-    # 状态码为3时，修改监控进程
-    # 删除和修改都是将process_info表中的is_alive激活字段的值更改为0，agent上传保存的信息后会自动更新数据。
-    elif status == 2 or status == 3:
+    # 状态码为2时，删除监控进程.
+    # 将cmdb_host_process中的is_alive字段设置为0，这样agent就不会再获取该条监控信息
+    # 将process_info表中的is_alive激活字段的值更改为0，agent上传保存的信息后会自动更新数据。
+    elif status == 2:
         try:
             biz_ip = data["biz_ip"]
+            id = data["process_id"]
             db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
             cur = db.cursor()
-            sql1 = "select * from cmdb_host_process where biz_ip='{}'".format(biz_ip)
+            sql1 = "update cmdb_host_process set is_alive = 0 where id = {}".format(int(id))
             cur.execute(sql1)
-            process_list = cur.fetchall()
-            if not process_list:
-                logging.error('the cmdb_host_process table has no process info about biz_id:' + biz_ip)
-            else:
-                msg = {"pstatus": 7, 'ip': biz_ip}
-                agent_ip_port = (biz_ip, 9997)
-                sockfd.sendto(json.dumps(msg), agent_ip_port)
-                if status == 2:
-                    logging.info('dell monitor --> the biz_ip:' + biz_ip + ' info use UDP already send to agent successed !')
-                else:
-                    logging.info('update monitor --> the biz_ip:' + biz_ip + ' info use UDP already send to agent successed !')
-            sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(data["process_id"]))
+            sql2 = "update process_info set is_alive = 0 where process_id = {}".format(int(id))
             cur.execute(sql2)
             db.commit()
-            if status ==2:
-                logging.info('already delete process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
-            else:
-                logging.info('already update process_id: ' + str(data["process_id"]) + ' from process_info table successful!')
+            cur.close()
+            db.close()
+            logging.info('already delete process_id: ' + str(data["process_id"]) + ' info in DB successful!')
+            msg = {"pstatus": 7, 'ip': biz_ip}
+            agent_ip_port = (biz_ip, 9997)
+            sockfd.sendto(json.dumps(msg), agent_ip_port)
+            logging.info('dell monitor --> dell info already use UDP send to the biz_ip:' + biz_ip + ' successful !')
+
         except Exception as e:
-            logging.error('do_trans module status == 2 or status == 3 has error:' + str(e))
+            logging.error('do_trans module status=2 , has error:' + str(e))
+        finally:
+            sockfd.close()
+
+    # 状态码为3时， 修改监控信息
+    # 将process_info表中的is_alive激活字段的值更改为0，agent上传保存的信息后会自动更新数据。
+    elif status == 3:
+        try:
+            biz_ip = data["biz_ip"]
+            id = data["process_id"]
+            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
+            cur = db.cursor()
+            sql1 = "update process_info set is_alive = 0 where process_id = {}".format(int(id))
+            cur.execute(sql1)
+            db.commit()
+            cur.close()
+            db.close()
+            logging.info('already update process_id: ' + str(data["process_id"]) + ' info in DB successful!')
+            msg = {"pstatus": 7, 'ip': biz_ip}
+            agent_ip_port = (biz_ip, 9997)
+            sockfd.sendto(json.dumps(msg), agent_ip_port)
+            logging.info('update monitor --> update info already use UDP send to the biz_ip:' + biz_ip + ' successful !')
+        except Exception as e:
+            logging.error('do_trans module status=3 , has error:' + str(e))
         finally:
             sockfd.close()
 
