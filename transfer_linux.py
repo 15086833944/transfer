@@ -339,20 +339,26 @@ def fixed_point_result():
     update_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if id:
         # 存入数据库
-        try:
-            db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
-            cur = db.cursor()
-            sql1 = "update fixed_point_monitor set execute_result='{}',update_time=to_date('{}'," \
-                           "'yyyy-mm-dd hh24:mi:ss') where is_alive=1 and flow_id='{}'".format(result,str(update_time),id)
-            cur.execute(sql1)
-            db.commit()
-            cur.close()
-            db.close()
-            logging.info("already update fixed_point_result info of flow_id: {}".format(id))
-            return "ok"
-        except Exception as e:
-            logging.error("the fixed_point_result module has error:" + str(e))
-            return 'fixed_point_result result store failed ! please check the transfer'
+        if result:
+            try:
+                db = cx_Oracle.connect(db_user, db_pwd, '127.0.0.1:1521/' + db_name)
+                cur = db.cursor()
+                clob_data = cur.var(cx_Oracle.CLOB)  # 存入超过4000字节的大数据时，必须先将数据转换成clob对象
+                clob_data.setvalue(0, result)
+                sql1 = "update fixed_point_monitor set execute_result=(:1),update_time=to_date('{}'," \
+                               "'yyyy-mm-dd hh24:mi:ss') where is_alive=1 and flow_id='{}'".format(str(update_time),id)
+                pares = [result]
+                cur.execute(sql1, pares)
+                db.commit()
+                cur.close()
+                db.close()
+                logging.info("already update fixed_point_result info of flow_id:{} successful!".format(id))
+                return "ok"
+            except Exception as e:
+                logging.error("the fixed_point_result module has error:" + str(e))
+                return 'fixed_point_result result store failed ! please check the transfer'
+        else:
+            logging.info('the fixed_point_result is empty! flow_id:{}'.format(id))
     else:
         logging.error("the fixed_point_result message has something wrong!")
         return "the fixed_point_result message has something wrong!"
@@ -737,11 +743,25 @@ def main():
     t3.start()
 
 if __name__ == '__main__':
+    # 为横向扩展设计的接口
+    port = 9995
+    try:
+        port = sys.argv[1]
+        try:
+            port = int(port)
+        except:
+            print '端口输入有误，已将端口设置为默认端口号：9995'
+            port = 9995
+    except:
+        pass
+    print '------------------------------------'
+    print '   http port:{} now has start!'.format(port)
+    print '------------------------------------'
     # 调用创建守护进程
     daemon()
     # 判断是否已经有主程序启动,若没有就启动main()函数， 若有就不启动main(),方便后面进行flask端口横向扩展
     try:
-        msg = 'ps aux|grep transfer.py|grep -v grep|wc -l'
+        msg = 'ps aux|grep transfer_run|grep -v grep|wc -l'
         pipe = subprocess.Popen(msg, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         process_count,err = pipe.communicate()
         if int(process_count) <= 3:
@@ -749,6 +769,6 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error("__name__ has error: "+str(e))
 
-    WSGIServer(('0.0.0.0', 9995), app).serve_forever()
+    WSGIServer(('0.0.0.0', port), app).serve_forever()
 
 
